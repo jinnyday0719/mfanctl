@@ -1,6 +1,9 @@
 # mFanCtl
 
-mFanCtl is a macOS menu bar fan control utility for Apple Silicon Macs.
+![mFanCtl menu bar display](thum.jpeg)
+
+mFanCtl is a macOS menu bar fan control utility for Apple Silicon Macs. The
+temperature shown in the menu bar is based on GPU temperature.
 
 ## Requirements
 
