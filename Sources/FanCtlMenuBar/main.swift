@@ -1,0 +1,2961 @@
+import AppKit
+import Darwin
+import FanCtlCore
+import QuartzCore
+import ServiceManagement
+
+@main
+enum FanCtlMenuBarApp {
+    @MainActor
+    private static var appDelegate: FanCtlAppDelegate?
+
+    @MainActor
+    static func main() {
+        let app = NSApplication.shared
+        let delegate = FanCtlAppDelegate()
+        appDelegate = delegate
+        app.delegate = delegate
+        app.run()
+    }
+}
+
+private enum FanCtlDefaults {
+    static let didAskLaunchAtLoginKey = "didAskLaunchAtLogin"
+    static let launchAtLoginEnabledKey = "launchAtLoginEnabled"
+    static let menuBarTitleFormatKey = "menuBarTitleFormat"
+    static let appLanguageCodeKey = "appLanguageCode"
+    static let updateCheckAtLaunchEnabledKey = "updateCheckAtLaunchEnabled"
+}
+
+private enum AppLanguage: String, CaseIterable {
+    case korean = "ko"
+    case english = "en"
+
+    static var current: AppLanguage {
+        if let rawValue = UserDefaults.standard.string(forKey: FanCtlDefaults.appLanguageCodeKey),
+           let language = AppLanguage(rawValue: rawValue) {
+            return language
+        }
+
+        let preferredLanguage = Locale.preferredLanguages.first?.lowercased() ?? ""
+        return preferredLanguage.hasPrefix("ko") ? .korean : .english
+    }
+
+    static func setCurrent(_ language: AppLanguage) {
+        guard UserDefaults.standard.string(forKey: FanCtlDefaults.appLanguageCodeKey) != language.rawValue else {
+            return
+        }
+        UserDefaults.standard.set(language.rawValue, forKey: FanCtlDefaults.appLanguageCodeKey)
+        NotificationCenter.default.post(name: .fanCtlLanguageDidChange, object: nil)
+    }
+
+    var displayName: String {
+        switch self {
+        case .korean:
+            "한국어"
+        case .english:
+            "English"
+        }
+    }
+}
+
+private enum L10n {
+    private static func text(_ korean: String, _ english: String) -> String {
+        AppLanguage.current == .korean ? korean : english
+    }
+
+    static var quitApp: String { text("mFanCtl 종료", "Quit mFanCtl") }
+    static var windowMenu: String { text("윈도우", "Window") }
+    static var closeWindow: String { text("닫기", "Close") }
+    static var launchAtLoginPromptTitle: String { text("로그인 시 열기", "Open at Login") }
+    static var launchAtLoginPromptMessage: String { text("mFanCtl을 로그인할 때 자동으로 열 수 있습니다.", "mFanCtl can open automatically when you log in.") }
+    static var allow: String { text("허용", "Allow") }
+    static var later: String { text("나중에", "Later") }
+    static var fanPresetsHeader: String { text("팬 사전 설정:", "Fan Presets:") }
+    static var createPreset: String { text("사전 설정 만들기", "Create Preset") }
+    static var settings: String { text("설정...", "Settings...") }
+    static var more: String { text("더보기", "More") }
+    static var checkForUpdates: String { text("업데이트 확인...", "Check for Updates...") }
+    static var openGitHub: String { text("GitHub 바로가기", "Open GitHub") }
+    static var general: String { text("일반", "General") }
+    static var presets: String { text("사전 설정", "Presets") }
+    static var name: String { text("이름", "Name") }
+    static var add: String { text("추가", "Add") }
+    static var remove: String { text("삭제", "Remove") }
+    static var invalidRPMTitle: String { text("올바른 RPM을 입력하세요", "Enter a valid RPM") }
+    static var ok: String { text("확인", "OK") }
+    static var nameFieldLabel: String { text("이름:", "Name:") }
+    static var addPresetTitle: String { text("사전 설정 추가", "Add Preset") }
+    static var cancel: String { text("취소", "Cancel") }
+    static var launchAtLoginSection: String { text("  자동 실행", "  Auto Launch") }
+    static var launchAtLoginSetting: String { text("로그인 시 mFanCtl을 자동 실행", "Open mFanCtl at login") }
+    static var checkForUpdatesAtLaunch: String { text("앱 시작할 때 업데이트 확인", "Check for updates at launch") }
+    static var languageSection: String { text("  언어", "  Language") }
+    static var appLanguage: String { text("앱 언어", "App language") }
+    static var menuBarDisplaySection: String { text("  메뉴바 표시", "  Menu Bar Display") }
+    static var format: String { text("형식", "Format") }
+    static var menuBarDisplay: String { text("메뉴바 표시", "Menu Bar Display") }
+    static var automatic: String { text("자동", "Automatic") }
+    static var maximumSpeed: String { text("최고 속도", "Maximum Speed") }
+    static var presetBaseName: String { text("사전 설정", "Preset") }
+    static var maximum: String { text("최대", "Max") }
+    static var installingPermission: String { text("권한 설정 중...", "Setting up permission...") }
+    static var fanPermissionRequired: String { text("팬 제어 권한 필요", "Fan Control Permission Required") }
+    static var fanPermissionMessage: String { text("팬 속도를 변경하려면 관리자 권한이 필요합니다.", "Administrator permission is required to change fan speed.") }
+    static var grantPermission: String { text("권한 설정", "Set Up Permission") }
+    static var smcConnectionFailed: String { text("SMC 연결에 실패했습니다.", "SMC connection failed.") }
+    static var noFansFound: String { text("팬을 찾을 수 없습니다.", "No fans found.") }
+    static var missingPreset: String { text("사전 설정을 찾을 수 없습니다.", "Preset not found.") }
+    static var helperUnavailable: String { text("팬 제어 helper가 설치되어 있지 않습니다.", "Fan control helper is not installed.") }
+    static var invalidHelperResponse: String { text("helper 응답이 올바르지 않습니다.", "Invalid helper response.") }
+    static var permissionCancelled: String { text("권한 설정이 취소되었습니다.", "Permission setup was cancelled.") }
+    static var missingInstaller: String { text("helper 설치 파일이 앱 번들에 없습니다.", "Helper installer is missing from the app bundle.") }
+    static var updateAvailableTitle: String { text("새 버전이 있습니다", "Update Available") }
+    static var noUpdatesTitle: String { text("최신 버전입니다", "You're Up to Date") }
+    static var updateCheckFailedTitle: String { text("업데이트 확인 실패", "Update Check Failed") }
+    static var openGitHubButton: String { text("GitHub 열기", "Open GitHub") }
+    static var invalidUpdateResponse: String { text("GitHub 응답이 올바르지 않습니다.", "Invalid GitHub response.") }
+    static var releaseNotFound: String { text("GitHub 릴리즈 정보를 찾을 수 없습니다.", "GitHub release information could not be found.") }
+
+    static func invalidRPMMessage(range: ClosedRange<Int>) -> String {
+        text(
+            "RPM은 \(range.lowerBound)~\(range.upperBound) 사이의 숫자만 사용할 수 있습니다.",
+            "RPM must be a number from \(range.lowerBound) to \(range.upperBound)."
+        )
+    }
+
+    static func addPresetValidationMessage(range: ClosedRange<Int>) -> String {
+        text(
+            "RPM은 \(range.lowerBound)~\(range.upperBound) 사이의 숫자만 가능합니다.",
+            "RPM must be a number from \(range.lowerBound) to \(range.upperBound)."
+        )
+    }
+
+    static func presetName(index: Int) -> String {
+        text("사전 설정 \(index)", "Preset \(index)")
+    }
+
+    static func updateAvailableMessage(version: String) -> String {
+        text(
+            "mFanCtl \(version)을 사용할 수 있습니다.\nGitHub에서 최신 버전을 다운로드하세요.",
+            "mFanCtl \(version) is available.\nDownload the latest version from GitHub."
+        )
+    }
+
+    static func noUpdatesMessage(version: String) -> String {
+        text(
+            "현재 mFanCtl \(version)을 사용 중입니다.",
+            "You're currently using mFanCtl \(version)."
+        )
+    }
+
+    static func updateCheckFailedMessage(reason: String) -> String {
+        text(
+            "업데이트 정보를 확인할 수 없습니다.\n\(reason)",
+            "Unable to check for updates.\n\(reason)"
+        )
+    }
+}
+
+private extension Notification.Name {
+    static let fanCtlLanguageDidChange = Notification.Name("FanCtlLanguageDidChange")
+}
+
+private enum AppLinks {
+    static let githubRepository = URL(string: "https://github.com/jinnyday0719/mfanctl")!
+    static let githubLatestRelease = URL(string: "https://github.com/jinnyday0719/mfanctl/releases/latest")!
+    static let githubLatestReleaseAPI = URL(string: "https://api.github.com/repos/jinnyday0719/mfanctl/releases/latest")!
+}
+
+private enum AppPreferences {
+    static var isUpdateCheckAtLaunchEnabled: Bool {
+        guard UserDefaults.standard.object(forKey: FanCtlDefaults.updateCheckAtLaunchEnabledKey) != nil else {
+            return true
+        }
+        return UserDefaults.standard.bool(forKey: FanCtlDefaults.updateCheckAtLaunchEnabledKey)
+    }
+
+    static func setUpdateCheckAtLaunchEnabled(_ isEnabled: Bool) {
+        UserDefaults.standard.set(isEnabled, forKey: FanCtlDefaults.updateCheckAtLaunchEnabledKey)
+    }
+}
+
+private struct GitHubRelease: Decodable {
+    let tagName: String
+    let htmlURL: URL?
+
+    enum CodingKeys: String, CodingKey {
+        case tagName = "tag_name"
+        case htmlURL = "html_url"
+    }
+}
+
+private struct AppVersion: Comparable {
+    let components: [Int]
+    let rawValue: String
+
+    init(_ rawValue: String) {
+        let trimmedValue = rawValue
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
+        let numericPrefix = trimmedValue.split(separator: "-", maxSplits: 1).first.map(String.init) ?? trimmedValue
+        components = numericPrefix
+            .split(separator: ".")
+            .map { Int($0) ?? 0 }
+        self.rawValue = trimmedValue
+    }
+
+    static var current: AppVersion {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
+        return AppVersion(version)
+    }
+
+    static func < (lhs: AppVersion, rhs: AppVersion) -> Bool {
+        let count = max(lhs.components.count, rhs.components.count)
+        for index in 0..<count {
+            let left = index < lhs.components.count ? lhs.components[index] : 0
+            let right = index < rhs.components.count ? rhs.components[index] : 0
+            if left != right {
+                return left < right
+            }
+        }
+        return false
+    }
+}
+
+private enum UpdateCheckError: LocalizedError {
+    case invalidResponse
+    case httpStatus(Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidResponse:
+            L10n.invalidUpdateResponse
+        case .httpStatus(404):
+            L10n.releaseNotFound
+        case .httpStatus(let statusCode):
+            "GitHub API returned HTTP \(statusCode)."
+        }
+    }
+}
+
+private enum UpdateChecker {
+    static func latestRelease() async throws -> GitHubRelease {
+        var request = URLRequest(url: AppLinks.githubLatestReleaseAPI)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("mFanCtl", forHTTPHeaderField: "User-Agent")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw UpdateCheckError.invalidResponse
+        }
+        guard httpResponse.statusCode == 200 else {
+            throw UpdateCheckError.httpStatus(httpResponse.statusCode)
+        }
+        return try JSONDecoder().decode(GitHubRelease.self, from: data)
+    }
+}
+
+@MainActor
+private func centerWindowOnActiveScreen(_ window: NSWindow) {
+    guard let screenFrame = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame else {
+        window.center()
+        return
+    }
+
+    let windowFrame = window.frame
+    let verticalOffset = min(72, screenFrame.height * 0.08)
+    let targetY = round(screenFrame.midY - (windowFrame.height / 2) + verticalOffset)
+    let clampedY = min(max(targetY, screenFrame.minY), screenFrame.maxY - windowFrame.height)
+    window.setFrameOrigin(NSPoint(
+        x: round(screenFrame.midX - (windowFrame.width / 2)),
+        y: clampedY
+    ))
+}
+
+@MainActor
+final class FanCtlAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
+    private let model = FanCtlMenuBarModel()
+    private let menu = NSMenu()
+    private var statusItem: NSStatusItem?
+    private var presetMenuItems: [FanPreset: NSMenuItem] = [:]
+    private var errorItem: NSMenuItem?
+    private var settingsWindowController: FanCtlSettingsWindowController?
+    private var createPresetWindowController: FanCtlCreatePresetWindowController?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        installMainMenu()
+        NSApplication.shared.setActivationPolicy(.accessory)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(languageDidChange(_:)),
+            name: .fanCtlLanguageDidChange,
+            object: nil
+        )
+
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem?.menu = menu
+        menu.delegate = self
+
+        buildMenu()
+        model.didChange = { [weak self] in
+            self?.refreshMenu()
+        }
+        model.didChangePresetList = { [weak self] in
+            self?.buildMenu()
+            self?.refreshMenu()
+        }
+        refreshMenu()
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                return
+            }
+            self.promptForLaunchAtLoginIfNeeded()
+            if AppPreferences.isUpdateCheckAtLaunchEnabled {
+                self.checkForUpdates(presentsNoUpdate: false)
+            }
+        }
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        refreshMenu()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        returnToMenuBarModeIfNoWindowsAreVisible()
+    }
+
+    private func installMainMenu() {
+        let mainMenu = NSMenu()
+
+        let appMenuItem = NSMenuItem()
+        mainMenu.addItem(appMenuItem)
+
+        let appMenu = NSMenu(title: "mFanCtl")
+        appMenuItem.submenu = appMenu
+
+        let quitItem = NSMenuItem(title: L10n.quitApp, action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        quitItem.target = NSApplication.shared
+        appMenu.addItem(quitItem)
+
+        let windowMenuItem = NSMenuItem()
+        mainMenu.addItem(windowMenuItem)
+
+        let windowMenu = NSMenu(title: L10n.windowMenu)
+        windowMenuItem.submenu = windowMenu
+
+        let closeItem = NSMenuItem(title: L10n.closeWindow, action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        closeItem.target = nil
+        windowMenu.addItem(closeItem)
+
+        NSApplication.shared.mainMenu = mainMenu
+        NSApplication.shared.windowsMenu = windowMenu
+    }
+
+    private func promptForLaunchAtLoginIfNeeded() {
+        guard !UserDefaults.standard.bool(forKey: FanCtlDefaults.didAskLaunchAtLoginKey) else {
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = L10n.launchAtLoginPromptTitle
+        alert.informativeText = L10n.launchAtLoginPromptMessage
+        let enableButton = alert.addButton(withTitle: L10n.allow)
+        enableButton.keyEquivalent = "\r"
+        alert.addButton(withTitle: L10n.later)
+
+        let response = runFrontmost(alert)
+        UserDefaults.standard.set(true, forKey: FanCtlDefaults.didAskLaunchAtLoginKey)
+
+        if response == .alertFirstButtonReturn {
+            UserDefaults.standard.set(enableLaunchAtLogin(), forKey: FanCtlDefaults.launchAtLoginEnabledKey)
+        } else {
+            disableLaunchAtLogin()
+            UserDefaults.standard.set(false, forKey: FanCtlDefaults.launchAtLoginEnabledKey)
+        }
+    }
+
+    private func enableLaunchAtLogin() -> Bool {
+        let service = SMAppService.mainApp
+        guard service.status != .enabled else {
+            return true
+        }
+
+        do {
+            try service.register()
+            return true
+        } catch {
+            NSLog("mFanCtl failed to register launch at login: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    private func disableLaunchAtLogin() {
+        let service = SMAppService.mainApp
+        guard service.status != .notRegistered else {
+            return
+        }
+
+        do {
+            try service.unregister()
+        } catch {
+            NSLog("mFanCtl failed to unregister launch at login: \(error.localizedDescription)")
+        }
+    }
+
+    private func runFrontmost(_ alert: NSAlert) -> NSApplication.ModalResponse {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        alert.layout()
+        alert.window.level = .floating
+        alert.window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        centerWindowOnActiveScreen(alert.window)
+        alert.window.orderFrontRegardless()
+        return alert.runModal()
+    }
+
+    private func buildMenu() {
+        menu.removeAllItems()
+        presetMenuItems.removeAll()
+        menu.addItem(makeTitleItem())
+        menu.addItem(.separator())
+
+        let presetHeader = NSMenuItem(title: L10n.fanPresetsHeader, action: nil, keyEquivalent: "")
+        presetHeader.isEnabled = false
+        menu.addItem(presetHeader)
+
+        for preset in model.presetEntries {
+            let item = NSMenuItem(title: preset.name, action: #selector(selectPreset(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = preset.menuIdentifier
+            menu.addItem(item)
+            presetMenuItems[preset.preset] = item
+        }
+
+        let errorItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        errorItem.isEnabled = false
+        errorItem.isHidden = true
+        menu.addItem(errorItem)
+        self.errorItem = errorItem
+
+        menu.addItem(.separator())
+
+        let createPresetItem = NSMenuItem(title: L10n.createPreset, action: #selector(openCreatePreset), keyEquivalent: "")
+        createPresetItem.target = self
+        menu.addItem(createPresetItem)
+
+        menu.addItem(.separator())
+
+        let settingsItem = NSMenuItem(title: L10n.settings, action: #selector(openSettings), keyEquivalent: "")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
+
+        menu.addItem(.separator())
+
+        let moreItem = NSMenuItem(title: L10n.more, action: nil, keyEquivalent: "")
+        let moreMenu = NSMenu(title: L10n.more)
+        let checkForUpdatesItem = NSMenuItem(title: L10n.checkForUpdates, action: #selector(checkForUpdatesFromMenu), keyEquivalent: "")
+        checkForUpdatesItem.target = self
+        moreMenu.addItem(checkForUpdatesItem)
+        moreMenu.addItem(.separator())
+        let githubItem = NSMenuItem(title: L10n.openGitHub, action: #selector(openGitHub), keyEquivalent: "")
+        githubItem.target = self
+        moreMenu.addItem(githubItem)
+        moreItem.submenu = moreMenu
+        menu.addItem(moreItem)
+
+        menu.addItem(.separator())
+
+        let quitItem = NSMenuItem(title: L10n.quitApp, action: #selector(quit), keyEquivalent: "")
+        quitItem.target = self
+        menu.addItem(quitItem)
+    }
+
+    @objc private func languageDidChange(_ notification: Notification) {
+        installMainMenu()
+        buildMenu()
+        refreshMenu()
+        settingsWindowController?.refreshLocalizedText()
+        createPresetWindowController?.refreshLocalizedText()
+    }
+
+    private func makeTitleItem() -> NSMenuItem {
+        let item = NSMenuItem()
+        item.isEnabled = false
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 180, height: 26))
+        let label = NSTextField(labelWithString: "mFanCtl")
+        label.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
+        label.textColor = .labelColor
+        label.frame = NSRect(x: 18, y: 4, width: 144, height: 18)
+        container.addSubview(label)
+        item.view = container
+
+        return item
+    }
+
+    private func refreshMenu() {
+        updateStatusTitle()
+
+        for preset in model.presetEntries {
+            let item = presetMenuItems[preset.preset]
+            item?.title = preset.name
+            item?.state = model.selectedPreset == preset.preset ? .on : .off
+            item?.isEnabled = !model.presetsDisabled
+        }
+
+        if let errorMessage = model.errorMessage {
+            errorItem?.title = errorMessage
+            errorItem?.isHidden = false
+        } else {
+            errorItem?.title = ""
+            errorItem?.isHidden = true
+        }
+    }
+
+    private func updateStatusTitle() {
+        guard let button = statusItem?.button else {
+            return
+        }
+
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        ]
+        button.attributedTitle = NSAttributedString(string: model.menuBarTitle, attributes: attributes)
+    }
+
+    @objc private func selectPreset(_ sender: NSMenuItem) {
+        guard let rawIdentifier = sender.representedObject as? String,
+              let preset = FanPreset(menuIdentifier: rawIdentifier)
+        else {
+            return
+        }
+        model.applyPresetSelection(preset)
+    }
+
+    @objc private func openSettings() {
+        if settingsWindowController == nil {
+            settingsWindowController = FanCtlSettingsWindowController(model: model)
+            settingsWindowController?.window?.delegate = self
+        }
+        settingsWindowController?.showGeneralTab()
+        presentAppWindow(settingsWindowController)
+    }
+
+    @objc private func openCreatePreset() {
+        if let settingsWindowController,
+           settingsWindowController.window?.isVisible == true {
+            settingsWindowController.showPresetList()
+            presentAppWindow(settingsWindowController)
+            return
+        }
+
+        if createPresetWindowController == nil {
+            createPresetWindowController = FanCtlCreatePresetWindowController(model: model)
+            createPresetWindowController?.window?.delegate = self
+        }
+        presentAppWindow(createPresetWindowController)
+    }
+
+    private func presentAppWindow(_ windowController: NSWindowController?) {
+        NSApplication.shared.setActivationPolicy(.regular)
+        windowController?.showWindow(nil)
+        windowController?.window?.makeKeyAndOrderFront(nil)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+
+    private func returnToMenuBarModeIfNoWindowsAreVisible() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                return
+            }
+
+            let hasVisibleWindow = [
+                self.settingsWindowController?.window,
+                self.createPresetWindowController?.window
+            ].contains { $0?.isVisible == true }
+
+            guard !hasVisibleWindow else {
+                return
+            }
+
+            NSApplication.shared.setActivationPolicy(.accessory)
+        }
+    }
+
+    @objc private func openGitHub() {
+        NSWorkspace.shared.open(AppLinks.githubRepository)
+    }
+
+    @objc private func checkForUpdatesFromMenu() {
+        checkForUpdates(presentsNoUpdate: true)
+    }
+
+    private func checkForUpdates(presentsNoUpdate: Bool) {
+        Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+
+            do {
+                let release = try await UpdateChecker.latestRelease()
+                let latestVersion = AppVersion(release.tagName)
+                let currentVersion = AppVersion.current
+
+                if latestVersion > currentVersion {
+                    self.presentUpdateAvailable(version: latestVersion.rawValue, releaseURL: release.htmlURL ?? AppLinks.githubLatestRelease)
+                } else if presentsNoUpdate {
+                    self.presentNoUpdatesAvailable(version: currentVersion.rawValue)
+                }
+            } catch {
+                if presentsNoUpdate {
+                    self.presentUpdateCheckFailed(reason: error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func presentUpdateAvailable(version: String, releaseURL: URL) {
+        let alert = NSAlert()
+        alert.messageText = L10n.updateAvailableTitle
+        alert.informativeText = L10n.updateAvailableMessage(version: version)
+        let openButton = alert.addButton(withTitle: L10n.openGitHubButton)
+        openButton.keyEquivalent = "\r"
+        alert.addButton(withTitle: L10n.later)
+
+        if runFrontmost(alert) == .alertFirstButtonReturn {
+            NSWorkspace.shared.open(releaseURL)
+        }
+    }
+
+    private func presentNoUpdatesAvailable(version: String) {
+        let alert = NSAlert()
+        alert.messageText = L10n.noUpdatesTitle
+        alert.informativeText = L10n.noUpdatesMessage(version: version)
+        alert.addButton(withTitle: L10n.ok)
+        _ = runFrontmost(alert)
+    }
+
+    private func presentUpdateCheckFailed(reason: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = L10n.updateCheckFailedTitle
+        alert.informativeText = L10n.updateCheckFailedMessage(reason: reason)
+        alert.addButton(withTitle: L10n.ok)
+        _ = runFrontmost(alert)
+    }
+
+    @objc private func quit() {
+        NSApplication.shared.terminate(nil)
+    }
+}
+
+private enum FanCtlWindowLayout {
+    static let settingsContentSize = NSSize(width: 450, height: 228)
+    static let settingsMinimumSize = NSSize(width: 420, height: 212)
+    static let menuBarDisplaySettingsContentSize = NSSize(width: settingsContentSize.width, height: 98)
+    static let menuBarDisplaySettingsMinimumSize = NSSize(width: settingsMinimumSize.width, height: 98)
+    static let presetContentSize = NSSize(width: settingsContentSize.width, height: 220)
+    static let presetMinimumSize = NSSize(width: settingsMinimumSize.width, height: 200)
+}
+
+@MainActor
+final class FanCtlSettingsWindowController: NSWindowController {
+    private enum DisplayMode {
+        case settings
+        case presets
+    }
+
+    private enum SettingsTab {
+        case general
+        case menuBarDisplay
+    }
+
+    private let settingsViewController: FanCtlSettingsViewController
+    private let presetListViewController: FanCtlPresetListViewController
+    private let settingsToolbar = NSToolbar(identifier: "FanCtlSettingsToolbar")
+    private let settingsFrameSize = FanCtlSettingsWindowController.measuredSettingsFrameSize(for: FanCtlWindowLayout.settingsContentSize)
+    private let menuBarDisplaySettingsFrameSize = FanCtlSettingsWindowController.measuredSettingsFrameSize(for: FanCtlWindowLayout.menuBarDisplaySettingsContentSize)
+    private let presetFrameSize = FanCtlSettingsWindowController.measuredFrameSize(for: FanCtlWindowLayout.presetContentSize)
+    private var displayMode: DisplayMode = .settings
+    private var transitionTask: Task<Void, Never>?
+
+    init(model: FanCtlMenuBarModel) {
+        settingsViewController = FanCtlSettingsViewController(model: model)
+        presetListViewController = FanCtlPresetListViewController(model: model)
+
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: FanCtlWindowLayout.settingsContentSize),
+            styleMask: [.titled, .closable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentViewController = settingsViewController
+        window.title = L10n.general
+        window.backgroundColor = .windowBackgroundColor
+        window.minSize = FanCtlWindowLayout.settingsMinimumSize
+        window.isReleasedWhenClosed = false
+        window.tabbingMode = .disallowed
+        window.toolbarStyle = .preference
+        window.titlebarSeparatorStyle = .line
+
+        settingsToolbar.delegate = settingsViewController
+        settingsToolbar.displayMode = .iconAndLabel
+        settingsToolbar.allowsUserCustomization = false
+        window.toolbar = settingsToolbar
+        window.center()
+
+        super.init(window: window)
+
+        settingsViewController.didSelectGeneralTab = { [weak self] in
+            self?.showSettingsTab(.general)
+        }
+        settingsViewController.didSelectMenuBarDisplayTab = { [weak self] in
+            self?.showSettingsTab(.menuBarDisplay)
+        }
+    }
+
+    func showGeneralTab() {
+        transition(to: .settings)
+    }
+
+    func showPresetList() {
+        transition(to: .presets)
+    }
+
+    func refreshLocalizedText() {
+        settingsViewController.refreshLocalizedText(toolbar: settingsToolbar)
+        presetListViewController.refreshLocalizedText()
+
+        switch displayMode {
+        case .settings:
+            window?.title = settingsViewController.currentTitle
+        case .presets:
+            window?.title = L10n.presets
+        }
+    }
+
+    private func transition(to mode: DisplayMode) {
+        guard let window else {
+            return
+        }
+
+        transitionTask?.cancel()
+        let startFrame = window.frame
+        let targetFrame = targetFrame(for: frameSize(for: mode), anchoredTo: startFrame)
+        guard window.isVisible, displayMode != mode else {
+            apply(mode, fadesIn: false)
+            window.setFrame(targetFrame, display: true)
+            return
+        }
+
+        transitionTask = Task { @MainActor [weak self] in
+            self?.apply(mode, fadesIn: false)
+            window.setFrame(startFrame, display: true)
+            window.minSize = self?.minimumSize(for: mode) ?? window.minSize
+            await self?.animateFrame(to: targetFrame, duration: 0.28)
+        }
+    }
+
+    private func showSettingsTab(_ tab: SettingsTab) {
+        guard let window else {
+            return
+        }
+
+        transitionTask?.cancel()
+        let startFrame = window.frame
+        let targetFrame = targetFrame(for: settingsFrameSize(for: tab), anchoredTo: startFrame)
+        let applyTab = { [weak self] in
+            guard let self else {
+                return
+            }
+            switch tab {
+            case .general:
+                self.settingsViewController.showGeneralTab()
+                window.toolbar?.selectedItemIdentifier = FanCtlSettingsViewController.generalToolbarIdentifier
+            case .menuBarDisplay:
+                self.settingsViewController.showMenuBarDisplayTab()
+                window.toolbar?.selectedItemIdentifier = FanCtlSettingsViewController.menuBarDisplayToolbarIdentifier
+            }
+            window.title = self.settingsViewController.currentTitle
+            window.minSize = self.settingsMinimumSize(for: tab)
+        }
+
+        guard window.isVisible, displayMode == .settings else {
+            applyTab()
+            window.setFrame(targetFrame, display: true)
+            return
+        }
+
+        guard abs(window.frame.height - targetFrame.height) > 0.5 else {
+            applyTab()
+            return
+        }
+
+        transitionTask = Task { @MainActor [weak self] in
+            applyTab()
+            window.setFrame(startFrame, display: true)
+            await self?.animateFrame(to: targetFrame, duration: 0.22)
+        }
+    }
+
+    private func apply(_ mode: DisplayMode, fadesIn: Bool) {
+        guard let window else {
+            return
+        }
+
+        switch mode {
+        case .settings:
+            settingsViewController.showGeneralTab()
+            window.minSize = FanCtlWindowLayout.settingsMinimumSize
+            window.toolbarStyle = .preference
+            window.titlebarSeparatorStyle = .line
+            window.toolbar = settingsToolbar
+            window.contentViewController = settingsViewController
+            window.toolbar?.selectedItemIdentifier = FanCtlSettingsViewController.generalToolbarIdentifier
+            window.title = L10n.general
+        case .presets:
+            window.minSize = FanCtlWindowLayout.presetMinimumSize
+            window.toolbar = nil
+            window.titlebarSeparatorStyle = .line
+            window.contentViewController = presetListViewController
+            window.title = L10n.presets
+        }
+
+        displayMode = mode
+        window.contentView?.alphaValue = fadesIn ? 0 : 1
+        guard fadesIn else {
+            return
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.14
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            window.contentView?.animator().alphaValue = 1
+        }
+    }
+
+    private func frameSize(for mode: DisplayMode) -> NSSize {
+        switch mode {
+        case .settings:
+            settingsFrameSize
+        case .presets:
+            presetFrameSize
+        }
+    }
+
+    private func settingsFrameSize(for tab: SettingsTab) -> NSSize {
+        switch tab {
+        case .general:
+            settingsFrameSize
+        case .menuBarDisplay:
+            menuBarDisplaySettingsFrameSize
+        }
+    }
+
+    private func minimumSize(for mode: DisplayMode) -> NSSize {
+        switch mode {
+        case .settings:
+            FanCtlWindowLayout.settingsMinimumSize
+        case .presets:
+            FanCtlWindowLayout.presetMinimumSize
+        }
+    }
+
+    private func settingsMinimumSize(for tab: SettingsTab) -> NSSize {
+        switch tab {
+        case .general:
+            FanCtlWindowLayout.settingsMinimumSize
+        case .menuBarDisplay:
+            FanCtlWindowLayout.menuBarDisplaySettingsMinimumSize
+        }
+    }
+
+    private func targetFrame(for frameSize: NSSize, anchoredTo currentFrame: NSRect) -> NSRect {
+        return NSRect(
+            x: currentFrame.minX,
+            y: currentFrame.maxY - frameSize.height,
+            width: frameSize.width,
+            height: frameSize.height
+        )
+    }
+
+    private func animateFrame(to targetFrame: NSRect, duration: TimeInterval) async {
+        guard let window else {
+            return
+        }
+
+        let startFrame = window.frame
+        let frameInterval: UInt64 = 16_000_000
+        let steps = max(1, Int(duration / 0.016))
+
+        for step in 1...steps {
+            guard !Task.isCancelled else {
+                return
+            }
+
+            let progress = Double(step) / Double(steps)
+            let easedProgress = progress * progress * (3 - 2 * progress)
+            let nextFrame = interpolateFrame(from: startFrame, to: targetFrame, progress: easedProgress)
+            window.setFrame(nextFrame, display: true)
+            try? await Task.sleep(nanoseconds: frameInterval)
+        }
+
+        window.setFrame(targetFrame, display: true)
+    }
+
+    private func interpolateFrame(from startFrame: NSRect, to targetFrame: NSRect, progress: Double) -> NSRect {
+        let value = { (start: CGFloat, end: CGFloat) -> CGFloat in
+            start + ((end - start) * CGFloat(progress))
+        }
+        return NSRect(
+            x: value(startFrame.minX, targetFrame.minX),
+            y: value(startFrame.minY, targetFrame.minY),
+            width: value(startFrame.width, targetFrame.width),
+            height: value(startFrame.height, targetFrame.height)
+        )
+    }
+
+    private static func measuredFrameSize(for contentSize: NSSize) -> NSSize {
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: contentSize),
+            styleMask: [.titled, .closable, .miniaturizable],
+            backing: .buffered,
+            defer: true
+        )
+        window.titlebarSeparatorStyle = .line
+        return window.frame.size
+    }
+
+    private static func measuredSettingsFrameSize(for contentSize: NSSize) -> NSSize {
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: contentSize),
+            styleMask: [.titled, .closable, .miniaturizable],
+            backing: .buffered,
+            defer: true
+        )
+        window.toolbarStyle = .preference
+        window.titlebarSeparatorStyle = .line
+
+        let toolbar = NSToolbar(identifier: "FanCtlSettingsToolbarSizing")
+        toolbar.displayMode = .iconAndLabel
+        toolbar.allowsUserCustomization = false
+        window.toolbar = toolbar
+        return window.frame.size
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+}
+
+@MainActor
+final class FanCtlCreatePresetWindowController: NSWindowController {
+    private let presetListViewController: FanCtlPresetListViewController
+
+    init(model: FanCtlMenuBarModel) {
+        presetListViewController = FanCtlPresetListViewController(model: model)
+
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: FanCtlWindowLayout.presetContentSize),
+            styleMask: [.titled, .closable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentViewController = presetListViewController
+        window.title = L10n.presets
+        window.backgroundColor = .windowBackgroundColor
+        window.minSize = FanCtlWindowLayout.presetMinimumSize
+        window.isReleasedWhenClosed = false
+        window.tabbingMode = .disallowed
+        window.center()
+
+        super.init(window: window)
+    }
+
+    func refreshLocalizedText() {
+        window?.title = L10n.presets
+        presetListViewController.refreshLocalizedText()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+}
+
+@MainActor
+private final class FanCtlPresetListViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
+    private enum Column {
+        static let name = NSUserInterfaceItemIdentifier("name")
+        static let rpm = NSUserInterfaceItemIdentifier("rpm")
+    }
+
+    private let tableHorizontalInset: CGFloat = 22
+    private let rpmColumnPreferredWidth: CGFloat = 128
+    private let model: FanCtlMenuBarModel
+    private let tableView = EditablePresetTableView()
+    private let scrollView = VerticalOnlyPresetScrollView()
+    private let footerView = PresetFooterView()
+    private let addButton = NSButton()
+    private let removeButton = NSButton()
+    private var isShowingInvalidRPMAlert = false
+    private var pendingTextFocus: (id: UUID, columnIdentifier: NSUserInterfaceItemIdentifier)?
+    private var suppressNextEndEditingCommitID: UUID?
+    private weak var addPresetNameField: NSTextField?
+    private weak var addPresetRPMField: NSTextField?
+    private weak var addPresetConfirmButton: NSButton?
+    private weak var addPresetValidationLabel: NSTextField?
+    private var addPresetRPMInputIsInvalid = false
+
+    init(model: FanCtlMenuBarModel) {
+        self.model = model
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func loadView() {
+        view = PresetListContentView(frame: NSRect(origin: .zero, size: FanCtlWindowLayout.presetContentSize))
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        setupFooter()
+        setupTable()
+    }
+
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        tableView.reloadData()
+        fitTableToVisibleWidth()
+        updateRemoveControl()
+    }
+
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        fitTableToVisibleWidth()
+    }
+
+    func refreshLocalizedText() {
+        if let nameColumn = tableView.tableColumn(withIdentifier: Column.name) {
+            nameColumn.title = L10n.name
+            nameColumn.headerCell = PaddedPresetHeaderCell(textCell: L10n.name)
+        }
+        addButton.setAccessibilityLabel(L10n.add)
+        removeButton.setAccessibilityLabel(L10n.remove)
+        tableView.reloadData()
+        fitTableToVisibleWidth()
+    }
+
+    private func setupTable() {
+        tableView.dataSource = self
+        tableView.delegate = self
+        tableView.target = self
+        tableView.doubleAction = #selector(editClickedCell)
+        tableView.headerView = NSTableHeaderView(frame: NSRect(x: 0, y: 0, width: 0, height: 26))
+        tableView.rowHeight = 24
+        tableView.usesAlternatingRowBackgroundColors = false
+        tableView.allowsColumnReordering = false
+        tableView.allowsColumnResizing = false
+        tableView.allowsMultipleSelection = false
+        tableView.columnAutoresizingStyle = .noColumnAutoresizing
+        tableView.style = .plain
+        tableView.intercellSpacing = NSSize(width: 0, height: tableView.intercellSpacing.height)
+        tableView.gridStyleMask = [.solidHorizontalGridLineMask]
+        tableView.backgroundColor = .clear
+        tableView.selectionHighlightStyle = .regular
+        tableView.focusRingType = .none
+
+        let nameColumn = NSTableColumn(identifier: Column.name)
+        nameColumn.title = L10n.name
+        nameColumn.width = 200
+        nameColumn.minWidth = 150
+        nameColumn.resizingMask = .autoresizingMask
+        nameColumn.headerCell = PaddedPresetHeaderCell(textCell: nameColumn.title)
+
+        let rpmColumn = NSTableColumn(identifier: Column.rpm)
+        rpmColumn.title = "RPM"
+        rpmColumn.width = rpmColumnPreferredWidth
+        rpmColumn.minWidth = 110
+        rpmColumn.resizingMask = []
+        rpmColumn.headerCell = PaddedPresetHeaderCell(textCell: rpmColumn.title)
+
+        tableView.addTableColumn(nameColumn)
+        tableView.addTableColumn(rpmColumn)
+
+        scrollView.contentView = LockedHorizontalClipView()
+        scrollView.documentView = tableView
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.horizontalScrollElasticity = .none
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = false
+        scrollView.focusRingType = .none
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(scrollView)
+
+        NSLayoutConstraint.activate([
+            scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: tableHorizontalInset),
+            scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -tableHorizontalInset),
+            scrollView.topAnchor.constraint(equalTo: view.topAnchor, constant: 16),
+            scrollView.bottomAnchor.constraint(equalTo: footerView.topAnchor)
+        ])
+    }
+
+    private func setupFooter() {
+        footerView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(footerView)
+
+        configureFooterButton(addButton, title: "+", accessibilityDescription: L10n.add, action: #selector(addPreset))
+        configureFooterButton(removeButton, title: "-", accessibilityDescription: L10n.remove, action: #selector(removeSelectedPreset))
+        footerView.addSubview(addButton)
+        footerView.addSubview(removeButton)
+
+        NSLayoutConstraint.activate([
+            footerView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: tableHorizontalInset),
+            footerView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -tableHorizontalInset),
+            footerView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -16),
+            footerView.heightAnchor.constraint(equalToConstant: 30),
+
+            addButton.leadingAnchor.constraint(equalTo: footerView.leadingAnchor, constant: 10),
+            addButton.centerYAnchor.constraint(equalTo: footerView.centerYAnchor),
+            addButton.widthAnchor.constraint(equalToConstant: 26),
+            addButton.heightAnchor.constraint(equalToConstant: 22),
+
+            removeButton.leadingAnchor.constraint(equalTo: addButton.trailingAnchor, constant: 2),
+            removeButton.centerYAnchor.constraint(equalTo: footerView.centerYAnchor),
+            removeButton.widthAnchor.constraint(equalToConstant: 26),
+            removeButton.heightAnchor.constraint(equalToConstant: 22)
+        ])
+    }
+
+    private func configureFooterButton(_ button: NSButton, title: String, accessibilityDescription: String, action: Selector) {
+        button.title = title
+        button.font = .systemFont(ofSize: 16, weight: .regular)
+        button.setAccessibilityLabel(accessibilityDescription)
+        button.bezelStyle = .regularSquare
+        button.isBordered = false
+        button.controlSize = .small
+        button.target = self
+        button.action = action
+        button.translatesAutoresizingMaskIntoConstraints = false
+    }
+
+    private func fitTableToVisibleWidth() {
+        let visibleWidth = floor(scrollView.contentSize.width)
+        guard visibleWidth > 0,
+              let nameColumn = tableView.tableColumn(withIdentifier: Column.name),
+              let rpmColumn = tableView.tableColumn(withIdentifier: Column.rpm)
+        else {
+            return
+        }
+
+        if abs(tableView.frame.width - visibleWidth) > 0.5 {
+            var frame = tableView.frame
+            frame.size.width = visibleWidth
+            tableView.frame = frame
+        }
+        if let headerView = tableView.headerView, abs(headerView.frame.width - visibleWidth) > 0.5 {
+            var headerFrame = headerView.frame
+            headerFrame.size.width = visibleWidth
+            headerView.frame = headerFrame
+        }
+
+        rpmColumn.width = min(rpmColumnPreferredWidth, max(rpmColumn.minWidth, floor(visibleWidth * 0.38)))
+        nameColumn.width = max(nameColumn.minWidth, visibleWidth - rpmColumn.width)
+        tableView.sizeLastColumnToFit()
+        tableView.tile()
+
+        let clipView = scrollView.contentView
+        if clipView.bounds.origin.x != 0 {
+            clipView.scroll(to: NSPoint(x: 0, y: clipView.bounds.origin.y))
+            scrollView.reflectScrolledClipView(clipView)
+        }
+    }
+
+    private func updateRemoveControl() {
+        let row = tableView.selectedRow
+        removeButton.isEnabled = row >= 0
+            && row < model.presetEntries.count
+            && model.presetEntries[row].isDeletable
+    }
+
+    private func makePresetCellView(identifier: NSUserInterfaceItemIdentifier) -> NSTableCellView {
+        let cellView = NSTableCellView()
+        cellView.identifier = identifier
+
+        let textField = PresetTextField()
+        textField.identifier = identifier
+        textField.isEditable = true
+        textField.isSelectable = true
+        textField.isBordered = false
+        textField.drawsBackground = false
+        textField.focusRingType = .none
+        textField.font = .systemFont(ofSize: 12, weight: .medium)
+        textField.lineBreakMode = .byTruncatingTail
+        textField.usesSingleLineMode = true
+        textField.cell?.isScrollable = true
+        textField.cell?.wraps = false
+        textField.delegate = self
+        textField.translatesAutoresizingMaskIntoConstraints = false
+
+        cellView.textField = textField
+        cellView.addSubview(textField)
+        NSLayoutConstraint.activate([
+            textField.leadingAnchor.constraint(equalTo: cellView.leadingAnchor, constant: 8),
+            textField.trailingAnchor.constraint(equalTo: cellView.trailingAnchor, constant: -8),
+            textField.centerYAnchor.constraint(equalTo: cellView.centerYAnchor),
+            textField.heightAnchor.constraint(lessThanOrEqualTo: cellView.heightAnchor, constant: -2)
+        ])
+
+        return cellView
+    }
+
+    @discardableResult
+    private func commitPresetTextFieldIfValid(_ textField: NSTextField, reloadsTable: Bool = true) -> Bool {
+        guard let presetTextField = textField as? PresetTextField,
+              let id = presetTextField.presetID,
+              let preset = model.userPresets.first(where: { $0.id == id })
+        else {
+            return true
+        }
+
+        switch presetTextField.columnIdentifier {
+        case Column.name:
+            model.updateUserPreset(id: id, name: presetTextField.stringValue, rpm: preset.rpm)
+        case Column.rpm:
+            guard let rpm = validatedRPM(from: presetTextField.stringValue) else {
+                presetTextField.stringValue = "\(preset.rpm)"
+                tableView.reloadData()
+                showInvalidRPMAlert()
+                updateRemoveControl()
+                return false
+            }
+            model.updateUserPreset(id: id, name: preset.name, rpm: rpm)
+        default:
+            return true
+        }
+
+        if reloadsTable {
+            tableView.reloadData()
+            fitTableToVisibleWidth()
+        }
+        updateRemoveControl()
+        return true
+    }
+
+    private func validatedRPM(from value: String) -> Int? {
+        let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedValue.isEmpty,
+              trimmedValue.range(of: #"^[0-9]+$"#, options: .regularExpression) != nil,
+              let rpm = Int(trimmedValue),
+              model.validUserRPMRange.contains(rpm)
+        else {
+            return nil
+        }
+        return rpm
+    }
+
+    private func showInvalidRPMAlert() {
+        guard !isShowingInvalidRPMAlert else {
+            return
+        }
+
+        isShowingInvalidRPMAlert = true
+        let validRange = model.validUserRPMRange
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = L10n.invalidRPMTitle
+        alert.informativeText = L10n.invalidRPMMessage(range: validRange)
+        alert.addButton(withTitle: L10n.ok)
+
+        guard let window = view.window else {
+            alert.runModal()
+            isShowingInvalidRPMAlert = false
+            return
+        }
+
+        alert.beginSheetModal(for: window) { [weak self] _ in
+            self?.isShowingInvalidRPMAlert = false
+        }
+    }
+
+    @objc private func addPreset() {
+        showAddPresetSheet()
+    }
+
+    private func showAddPresetSheet() {
+        let nameField = NSTextField(string: model.defaultNewUserPresetName)
+        nameField.delegate = self
+
+        let rpmField = NSTextField(string: "\(model.defaultNewUserPresetRPM)")
+        rpmField.delegate = self
+
+        addPresetNameField = nameField
+        addPresetRPMField = rpmField
+        addPresetRPMInputIsInvalid = false
+
+        let nameLabel = NSTextField(labelWithString: L10n.nameFieldLabel)
+        let rpmLabel = NSTextField(labelWithString: "RPM:")
+        let validationLabel = NSTextField(labelWithString: addPresetValidationMessage)
+        validationLabel.textColor = .systemRed
+        validationLabel.font = .systemFont(ofSize: 11)
+        validationLabel.isHidden = true
+        nameLabel.alignment = .right
+        rpmLabel.alignment = .right
+        addPresetValidationLabel = validationLabel
+
+        let accessoryView = NSView(frame: NSRect(x: 0, y: 0, width: 310, height: 82))
+        nameLabel.frame = NSRect(x: 0, y: 58, width: 56, height: 20)
+        nameField.frame = NSRect(x: 66, y: 54, width: 230, height: 24)
+        rpmLabel.frame = NSRect(x: 0, y: 28, width: 56, height: 20)
+        rpmField.frame = NSRect(x: 66, y: 24, width: 230, height: 24)
+        validationLabel.frame = NSRect(x: 66, y: 0, width: 230, height: 18)
+        accessoryView.addSubview(nameLabel)
+        accessoryView.addSubview(nameField)
+        accessoryView.addSubview(rpmLabel)
+        accessoryView.addSubview(rpmField)
+        accessoryView.addSubview(validationLabel)
+
+        let alert = NSAlert()
+        alert.messageText = L10n.addPresetTitle
+        alert.informativeText = ""
+        alert.accessoryView = accessoryView
+        let addButton = alert.addButton(withTitle: L10n.add)
+        addButton.keyEquivalent = "\r"
+        addPresetConfirmButton = addButton
+        alert.addButton(withTitle: L10n.cancel)
+        updateAddPresetValidationState(showsError: false)
+
+        DispatchQueue.main.async {
+            alert.window.initialFirstResponder = nameField
+            alert.window.makeFirstResponder(nameField)
+            nameField.selectText(nil)
+        }
+
+        guard let window = view.window else {
+            return
+        }
+
+        alert.beginSheetModal(for: window) { [weak self, weak nameField, weak rpmField] response in
+            guard let self,
+                  response == .alertFirstButtonReturn,
+                  let nameField,
+                  let rpmField
+            else {
+                self?.clearAddPresetSheetReferences()
+                return
+            }
+
+            guard let rpm = self.validatedRPM(from: rpmField.stringValue) else {
+                self.clearAddPresetSheetReferences()
+                return
+            }
+
+            let id = self.model.addUserPreset(name: nameField.stringValue, rpm: rpm)
+            if let row = self.model.presetEntries.firstIndex(where: { $0.preset == .custom(id) }) {
+                self.tableView.insertRows(at: IndexSet(integer: row), withAnimation: [])
+                self.tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+                self.tableView.scrollRowToVisible(row)
+            } else {
+                self.tableView.reloadData()
+            }
+            self.updateRemoveControl()
+            self.clearAddPresetSheetReferences()
+        }
+    }
+
+    private var addPresetValidationMessage: String {
+        let range = model.validUserRPMRange
+        return L10n.addPresetValidationMessage(range: range)
+    }
+
+    private func updateAddPresetValidationState(showsError: Bool) {
+        addPresetValidationLabel?.stringValue = addPresetValidationMessage
+        addPresetValidationLabel?.isHidden = !showsError
+        addPresetRPMField?.textColor = showsError ? .systemRed : .labelColor
+        addPresetConfirmButton?.isEnabled = !showsError
+        if !showsError {
+            addPresetRPMInputIsInvalid = false
+        }
+    }
+
+    private func rejectAddPresetRPM() {
+        NSSound.beep()
+        updateAddPresetValidationState(showsError: true)
+        addPresetRPMInputIsInvalid = true
+        addPresetRPMField?.selectText(nil)
+    }
+
+    private func commitAddPresetSheetFromKeyboard() {
+        guard let rpmField = addPresetRPMField,
+              validatedRPM(from: rpmField.stringValue) != nil
+        else {
+            rejectAddPresetRPM()
+            return
+        }
+
+        updateAddPresetValidationState(showsError: false)
+        addPresetConfirmButton?.performClick(nil)
+    }
+
+    private func clearAddPresetSheetReferences() {
+        addPresetNameField = nil
+        addPresetRPMField = nil
+        addPresetConfirmButton = nil
+        addPresetValidationLabel = nil
+        addPresetRPMInputIsInvalid = false
+    }
+
+    @objc private func removeSelectedPreset() {
+        let row = tableView.selectedRow
+        guard row >= 0,
+              row < model.presetEntries.count,
+              case .custom(let id) = model.presetEntries[row].preset
+        else {
+            return
+        }
+
+        model.deleteUserPreset(id: id)
+        tableView.reloadData()
+        updateRemoveControl()
+    }
+
+    @objc private func editClickedCell() {
+        let row = tableView.clickedRow
+        let column = tableView.clickedColumn
+        guard row >= 0,
+              row < model.presetEntries.count,
+              model.presetEntries[row].isEditable,
+              column >= 0,
+              let cellView = tableView.view(atColumn: column, row: row, makeIfNecessary: false) as? NSTableCellView,
+              let textField = cellView.textField
+        else {
+            return
+        }
+
+        view.window?.makeFirstResponder(textField)
+        textField.selectText(nil)
+    }
+
+    private func focusCell(row: Int, columnIdentifier: NSUserInterfaceItemIdentifier) {
+        guard let column = tableView.tableColumn(withIdentifier: columnIdentifier) else {
+            return
+        }
+
+        let columnIndex = tableView.column(withIdentifier: column.identifier)
+        guard columnIndex >= 0 else {
+            return
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            guard let self,
+                  row >= 0,
+                  row < self.tableView.numberOfRows
+            else {
+                return
+            }
+
+            self.tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            self.view.window?.makeKeyAndOrderFront(nil)
+            self.tableView.layoutSubtreeIfNeeded()
+            guard let cellView = self.tableView.view(atColumn: columnIndex, row: row, makeIfNecessary: true) as? NSTableCellView,
+                  let textField = cellView.textField
+            else {
+                return
+            }
+
+            _ = self.view.window?.makeFirstResponder(nil)
+            self.view.window?.makeFirstResponder(self.tableView)
+            self.tableView.editColumn(columnIndex, row: row, with: NSApplication.shared.currentEvent, select: true)
+            _ = self.view.window?.makeFirstResponder(textField)
+            textField.selectText(nil)
+        }
+    }
+
+    private func focusPreset(id: UUID, columnIdentifier: NSUserInterfaceItemIdentifier, reloadsTable: Bool) {
+        pendingTextFocus = (id, columnIdentifier)
+        if reloadsTable {
+            tableView.reloadData()
+        }
+
+        if let row = model.presetEntries.firstIndex(where: { $0.preset == .custom(id) }) {
+            tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            tableView.scrollRowToVisible(row)
+            focusCell(row: row, columnIdentifier: columnIdentifier)
+        }
+    }
+
+    private func focusRPMForTextField(_ textField: NSTextField) {
+        guard let presetTextField = textField as? PresetTextField,
+              presetTextField.columnIdentifier == Column.name,
+              let id = presetTextField.presetID
+        else {
+            return
+        }
+
+        focusPreset(id: id, columnIdentifier: Column.rpm, reloadsTable: false)
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int {
+        model.presetEntries.count
+    }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        guard row >= 0,
+              row < model.presetEntries.count,
+              let tableColumn
+        else {
+            return nil
+        }
+
+        let cellIdentifier = NSUserInterfaceItemIdentifier("preset-\(tableColumn.identifier.rawValue)")
+        let cellView = tableView.makeView(withIdentifier: cellIdentifier, owner: self) as? NSTableCellView
+            ?? makePresetCellView(identifier: cellIdentifier)
+        guard let textField = cellView.textField as? PresetTextField else {
+            return cellView
+        }
+
+        let preset = model.presetEntries[row]
+        switch tableColumn.identifier {
+        case Column.name:
+            textField.stringValue = preset.name
+        case Column.rpm:
+            textField.stringValue = preset.rpmText
+        default:
+            textField.stringValue = ""
+        }
+
+        if case .custom(let id) = preset.preset {
+            textField.presetID = id
+            if let pendingTextFocus,
+               pendingTextFocus.id == id,
+               pendingTextFocus.columnIdentifier == tableColumn.identifier {
+                self.pendingTextFocus = nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self, weak textField] in
+                    guard let self, let textField else {
+                        return
+                    }
+                    NSApplication.shared.activate(ignoringOtherApps: true)
+                    self.view.window?.makeKeyAndOrderFront(nil)
+                    _ = self.view.window?.makeFirstResponder(nil)
+                    self.view.window?.makeFirstResponder(self.tableView)
+                    self.view.window?.makeFirstResponder(textField)
+                    textField.selectText(nil)
+                }
+            }
+        } else {
+            textField.presetID = nil
+        }
+        textField.columnIdentifier = tableColumn.identifier
+        textField.isEditable = preset.isEditable
+        textField.isSelectable = preset.isEditable
+        textField.textColor = .labelColor
+
+        return cellView
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        updateRemoveControl()
+    }
+
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        SquarePresetTableRowView()
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard let textField = obj.object as? NSTextField else {
+            return
+        }
+        if textField === addPresetNameField || textField === addPresetRPMField {
+            return
+        }
+        if let presetTextField = textField as? PresetTextField,
+           let id = presetTextField.presetID,
+           suppressNextEndEditingCommitID == id {
+            suppressNextEndEditingCommitID = nil
+            return
+        }
+        commitPresetTextFieldIfValid(textField)
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard commandSelector == #selector(NSResponder.insertNewline(_:)),
+              let textField = control as? NSTextField
+        else {
+            return false
+        }
+
+        if textField === addPresetNameField {
+            textField.window?.makeFirstResponder(addPresetRPMField)
+            addPresetRPMField?.selectText(nil)
+            return true
+        }
+        if textField === addPresetRPMField {
+            commitAddPresetSheetFromKeyboard()
+            return true
+        }
+
+        let presetTextField = textField as? PresetTextField
+        guard commitPresetTextFieldIfValid(textField, reloadsTable: presetTextField?.columnIdentifier != Column.name) else {
+            return true
+        }
+
+        if presetTextField?.columnIdentifier == Column.name,
+           let id = presetTextField?.presetID {
+            suppressNextEndEditingCommitID = id
+        }
+        focusRPMForTextField(textField)
+        return true
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        guard let textField = obj.object as? NSTextField,
+              textField === addPresetRPMField
+        else {
+            return
+        }
+
+        let value = textField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isInvalid = validatedRPM(from: value) == nil
+        if isInvalid && !value.isEmpty && !addPresetRPMInputIsInvalid {
+            NSSound.beep()
+        }
+        updateAddPresetValidationState(showsError: isInvalid)
+        addPresetRPMInputIsInvalid = isInvalid && !value.isEmpty
+    }
+}
+
+private final class PresetTextField: NSTextField {
+    var presetID: UUID?
+    var columnIdentifier: NSUserInterfaceItemIdentifier?
+
+    override var acceptsFirstResponder: Bool {
+        isEditable
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let becameFirstResponder = super.becomeFirstResponder()
+        if becameFirstResponder {
+            currentEditor()?.selectAll(nil)
+        }
+        return becameFirstResponder
+    }
+}
+
+private final class EditablePresetTableView: NSTableView {
+    override func drawBackground(inClipRect clipRect: NSRect) {
+        let colors = NSColor.alternatingContentBackgroundColors
+        guard !colors.isEmpty else {
+            super.drawBackground(inClipRect: clipRect)
+            return
+        }
+
+        let rowStride = rowHeight + intercellSpacing.height
+        guard rowStride > 0 else {
+            super.drawBackground(inClipRect: clipRect)
+            return
+        }
+
+        let startRow = max(0, Int(floor(clipRect.minY / rowStride)))
+        var row = startRow
+        var rowY = CGFloat(startRow) * rowStride
+
+        while rowY < clipRect.maxY {
+            colors[row % colors.count].setFill()
+            NSRect(x: 0, y: rowY, width: bounds.width, height: rowStride).fill()
+            row += 1
+            rowY += rowStride
+        }
+    }
+
+    override func validateProposedFirstResponder(_ responder: NSResponder, for event: NSEvent?) -> Bool {
+        if responder is NSTextField || responder is NSTextView {
+            return true
+        }
+        return super.validateProposedFirstResponder(responder, for: event)
+    }
+}
+
+private final class LockedHorizontalClipView: NSClipView {
+    override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
+        var bounds = super.constrainBoundsRect(proposedBounds)
+        bounds.origin.x = 0
+        return bounds
+    }
+}
+
+private final class VerticalOnlyPresetScrollView: NSScrollView {
+    override func scrollWheel(with event: NSEvent) {
+        super.scrollWheel(with: event)
+        if contentView.bounds.origin.x != 0 {
+            contentView.scroll(to: NSPoint(x: 0, y: contentView.bounds.origin.y))
+            reflectScrolledClipView(contentView)
+        }
+    }
+}
+
+private final class PaddedPresetHeaderCell: NSTableHeaderCell {
+    override func drawingRect(forBounds rect: NSRect) -> NSRect {
+        super.drawingRect(forBounds: rect).insetBy(dx: 8, dy: 0)
+    }
+
+    override func titleRect(forBounds rect: NSRect) -> NSRect {
+        super.titleRect(forBounds: rect).insetBy(dx: 8, dy: 0)
+    }
+}
+
+private final class SquarePresetTableRowView: NSTableRowView {
+    override func drawSelection(in dirtyRect: NSRect) {
+        guard selectionHighlightStyle != .none else {
+            return
+        }
+
+        let selectionColor = isEmphasized
+            ? NSColor.selectedContentBackgroundColor
+            : NSColor.unemphasizedSelectedContentBackgroundColor
+        selectionColor.setFill()
+        bounds.fill()
+    }
+}
+
+private final class PresetListContentView: NSView {
+    override var isOpaque: Bool {
+        true
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.windowBackgroundColor.setFill()
+        dirtyRect.fill()
+
+        let cardRect = bounds.insetBy(dx: 22, dy: 16)
+        let path = NSBezierPath(roundedRect: cardRect, xRadius: 14, yRadius: 14)
+        cardBackgroundColor.setFill()
+        path.fill()
+    }
+
+    private var cardBackgroundColor: NSColor {
+        NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            return isDark
+                ? NSColor(calibratedWhite: 1.0, alpha: 0.055)
+                : NSColor(calibratedWhite: 0.0, alpha: 0.045)
+        }
+    }
+}
+
+private final class PresetFooterView: NSView {
+    override var isOpaque: Bool {
+        false
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.separatorColor.setStroke()
+        let line = NSBezierPath()
+        line.move(to: NSPoint(x: 0, y: bounds.height - 0.5))
+        line.line(to: NSPoint(x: bounds.width, y: bounds.height - 0.5))
+        line.lineWidth = 1
+        line.stroke()
+    }
+}
+
+@MainActor
+private final class FanCtlSettingsViewController: NSViewController, NSToolbarDelegate, NSTextFieldDelegate {
+    fileprivate static let generalToolbarIdentifier = NSToolbarItem.Identifier("general")
+    fileprivate static let menuBarDisplayToolbarIdentifier = NSToolbarItem.Identifier("menuBarDisplay")
+
+    private enum SettingsTab {
+        case general
+        case menuBarDisplay
+    }
+
+    private let model: FanCtlMenuBarModel
+    private let generalContentView = NSView()
+    private let menuBarDisplayContentView = NSView()
+    private let launchAtLoginSectionLabel = NSTextField(labelWithString: L10n.launchAtLoginSection)
+    private let launchAtLoginRow = SettingsRowView()
+    private let launchAtLoginLabel = NSTextField(labelWithString: L10n.launchAtLoginSetting)
+    private let launchAtLoginSwitch = NSSwitch()
+    private let updateCheckRow = SettingsRowView()
+    private let updateCheckLabel = NSTextField(labelWithString: L10n.checkForUpdatesAtLaunch)
+    private let updateCheckSwitch = NSSwitch()
+    private let languageSectionLabel = NSTextField(labelWithString: L10n.languageSection)
+    private let languageRow = SettingsRowView()
+    private let languageLabel = NSTextField(labelWithString: L10n.appLanguage)
+    private let languagePopUpButton = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let menuBarDisplaySectionLabel = NSTextField(labelWithString: L10n.menuBarDisplaySection)
+    private let menuBarFormatRow = SettingsRowView()
+    private let menuBarFormatLabel = NSTextField(labelWithString: L10n.format)
+    private let menuBarFormatField = NSTextField()
+    private var menuBarFormatLabelWidthConstraint: NSLayoutConstraint?
+    private var selectedTab: SettingsTab = .general
+    fileprivate var didSelectGeneralTab: (() -> Void)?
+    fileprivate var didSelectMenuBarDisplayTab: (() -> Void)?
+
+    init(model: FanCtlMenuBarModel) {
+        self.model = model
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func loadView() {
+        view = SettingsContentView(frame: NSRect(origin: .zero, size: FanCtlWindowLayout.settingsContentSize))
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        setupContent()
+        refreshLaunchAtLoginState()
+        refreshUpdateCheckState()
+        refreshMenuBarFormat()
+        showGeneralSettings()
+    }
+
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        refreshLaunchAtLoginState()
+        refreshUpdateCheckState()
+        refreshMenuBarFormat()
+        reloadLanguagePopUpButton()
+    }
+
+    fileprivate var currentTitle: String {
+        switch selectedTab {
+        case .general:
+            L10n.general
+        case .menuBarDisplay:
+            L10n.menuBarDisplay
+        }
+    }
+
+    fileprivate func refreshLocalizedText(toolbar: NSToolbar?) {
+        launchAtLoginSectionLabel.stringValue = L10n.launchAtLoginSection
+        launchAtLoginLabel.stringValue = L10n.launchAtLoginSetting
+        updateCheckLabel.stringValue = L10n.checkForUpdatesAtLaunch
+        languageSectionLabel.stringValue = L10n.languageSection
+        languageLabel.stringValue = L10n.appLanguage
+        menuBarDisplaySectionLabel.stringValue = L10n.menuBarDisplaySection
+        menuBarFormatLabel.stringValue = L10n.format
+        updateMenuBarFormatLabelWidth()
+        menuBarFormatField.placeholderString = FanCtlMenuBarModel.defaultMenuBarTitleFormat
+        reloadLanguagePopUpButton()
+        refreshToolbarItems(toolbar)
+        view.window?.title = currentTitle
+    }
+
+    private func setupContent() {
+        generalContentView.translatesAutoresizingMaskIntoConstraints = false
+        menuBarDisplayContentView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(generalContentView)
+        view.addSubview(menuBarDisplayContentView)
+
+        NSLayoutConstraint.activate([
+            generalContentView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            generalContentView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            generalContentView.topAnchor.constraint(equalTo: view.topAnchor),
+            generalContentView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+
+            menuBarDisplayContentView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            menuBarDisplayContentView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            menuBarDisplayContentView.topAnchor.constraint(equalTo: view.topAnchor),
+            menuBarDisplayContentView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+
+        setupGeneralContent()
+        setupMenuBarDisplayContent()
+    }
+
+    private func setupGeneralContent() {
+        launchAtLoginSectionLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        launchAtLoginSectionLabel.textColor = .labelColor
+        launchAtLoginSectionLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        launchAtLoginRow.translatesAutoresizingMaskIntoConstraints = false
+
+        launchAtLoginLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        launchAtLoginLabel.textColor = .labelColor
+        launchAtLoginLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        launchAtLoginSwitch.target = self
+        launchAtLoginSwitch.action = #selector(toggleLaunchAtLogin(_:))
+        launchAtLoginSwitch.controlSize = .small
+        launchAtLoginSwitch.translatesAutoresizingMaskIntoConstraints = false
+
+        updateCheckRow.translatesAutoresizingMaskIntoConstraints = false
+
+        updateCheckLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        updateCheckLabel.textColor = .labelColor
+        updateCheckLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        updateCheckSwitch.target = self
+        updateCheckSwitch.action = #selector(toggleUpdateCheckAtLaunch(_:))
+        updateCheckSwitch.controlSize = .small
+        updateCheckSwitch.translatesAutoresizingMaskIntoConstraints = false
+
+        languageSectionLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        languageSectionLabel.textColor = .labelColor
+        languageSectionLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        languageRow.translatesAutoresizingMaskIntoConstraints = false
+
+        languageLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        languageLabel.textColor = .labelColor
+        languageLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        languagePopUpButton.target = self
+        languagePopUpButton.action = #selector(selectLanguage(_:))
+        languagePopUpButton.controlSize = .small
+        languagePopUpButton.font = .systemFont(ofSize: 13)
+        languagePopUpButton.translatesAutoresizingMaskIntoConstraints = false
+        reloadLanguagePopUpButton()
+
+        generalContentView.addSubview(launchAtLoginSectionLabel)
+        generalContentView.addSubview(launchAtLoginRow)
+        generalContentView.addSubview(updateCheckRow)
+        generalContentView.addSubview(languageSectionLabel)
+        generalContentView.addSubview(languageRow)
+        launchAtLoginRow.addSubview(launchAtLoginLabel)
+        launchAtLoginRow.addSubview(launchAtLoginSwitch)
+        updateCheckRow.addSubview(updateCheckLabel)
+        updateCheckRow.addSubview(updateCheckSwitch)
+        languageRow.addSubview(languageLabel)
+        languageRow.addSubview(languagePopUpButton)
+
+        NSLayoutConstraint.activate([
+            launchAtLoginSectionLabel.leadingAnchor.constraint(equalTo: generalContentView.leadingAnchor, constant: 22),
+            launchAtLoginSectionLabel.topAnchor.constraint(equalTo: generalContentView.topAnchor, constant: 16),
+
+            launchAtLoginRow.leadingAnchor.constraint(equalTo: generalContentView.leadingAnchor, constant: 22),
+            launchAtLoginRow.trailingAnchor.constraint(equalTo: generalContentView.trailingAnchor, constant: -22),
+            launchAtLoginRow.topAnchor.constraint(equalTo: launchAtLoginSectionLabel.bottomAnchor, constant: 12),
+            launchAtLoginRow.heightAnchor.constraint(equalToConstant: 38),
+
+            launchAtLoginLabel.leadingAnchor.constraint(equalTo: launchAtLoginRow.leadingAnchor, constant: 12),
+            launchAtLoginLabel.centerYAnchor.constraint(equalTo: launchAtLoginRow.centerYAnchor),
+            launchAtLoginLabel.trailingAnchor.constraint(lessThanOrEqualTo: launchAtLoginSwitch.leadingAnchor, constant: -10),
+
+            launchAtLoginSwitch.trailingAnchor.constraint(equalTo: launchAtLoginRow.trailingAnchor, constant: -10),
+            launchAtLoginSwitch.centerYAnchor.constraint(equalTo: launchAtLoginRow.centerYAnchor),
+
+            updateCheckRow.leadingAnchor.constraint(equalTo: generalContentView.leadingAnchor, constant: 22),
+            updateCheckRow.trailingAnchor.constraint(equalTo: generalContentView.trailingAnchor, constant: -22),
+            updateCheckRow.topAnchor.constraint(equalTo: launchAtLoginRow.bottomAnchor, constant: 8),
+            updateCheckRow.heightAnchor.constraint(equalToConstant: 38),
+
+            updateCheckLabel.leadingAnchor.constraint(equalTo: updateCheckRow.leadingAnchor, constant: 12),
+            updateCheckLabel.centerYAnchor.constraint(equalTo: updateCheckRow.centerYAnchor),
+            updateCheckLabel.trailingAnchor.constraint(lessThanOrEqualTo: updateCheckSwitch.leadingAnchor, constant: -10),
+
+            updateCheckSwitch.trailingAnchor.constraint(equalTo: updateCheckRow.trailingAnchor, constant: -10),
+            updateCheckSwitch.centerYAnchor.constraint(equalTo: updateCheckRow.centerYAnchor),
+
+            languageSectionLabel.leadingAnchor.constraint(equalTo: generalContentView.leadingAnchor, constant: 22),
+            languageSectionLabel.topAnchor.constraint(equalTo: updateCheckRow.bottomAnchor, constant: 18),
+
+            languageRow.leadingAnchor.constraint(equalTo: generalContentView.leadingAnchor, constant: 22),
+            languageRow.trailingAnchor.constraint(equalTo: generalContentView.trailingAnchor, constant: -22),
+            languageRow.topAnchor.constraint(equalTo: languageSectionLabel.bottomAnchor, constant: 12),
+            languageRow.heightAnchor.constraint(equalToConstant: 38),
+
+            languageLabel.leadingAnchor.constraint(equalTo: languageRow.leadingAnchor, constant: 12),
+            languageLabel.centerYAnchor.constraint(equalTo: languageRow.centerYAnchor),
+            languageLabel.trailingAnchor.constraint(lessThanOrEqualTo: languagePopUpButton.leadingAnchor, constant: -10),
+
+            languagePopUpButton.trailingAnchor.constraint(equalTo: languageRow.trailingAnchor, constant: -10),
+            languagePopUpButton.centerYAnchor.constraint(equalTo: languageRow.centerYAnchor),
+            languagePopUpButton.widthAnchor.constraint(equalToConstant: 122)
+        ])
+    }
+
+    private func setupMenuBarDisplayContent() {
+        menuBarDisplaySectionLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        menuBarDisplaySectionLabel.textColor = .labelColor
+        menuBarDisplaySectionLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        menuBarFormatRow.translatesAutoresizingMaskIntoConstraints = false
+
+        menuBarFormatLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        menuBarFormatLabel.textColor = .labelColor
+        menuBarFormatLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        menuBarFormatField.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        menuBarFormatField.placeholderString = FanCtlMenuBarModel.defaultMenuBarTitleFormat
+        menuBarFormatField.delegate = self
+        menuBarFormatField.target = self
+        menuBarFormatField.action = #selector(commitMenuBarFormatField(_:))
+        menuBarFormatField.usesSingleLineMode = true
+        menuBarFormatField.lineBreakMode = .byTruncatingTail
+        menuBarFormatField.translatesAutoresizingMaskIntoConstraints = false
+
+        menuBarDisplayContentView.addSubview(menuBarDisplaySectionLabel)
+        menuBarDisplayContentView.addSubview(menuBarFormatRow)
+        menuBarFormatRow.addSubview(menuBarFormatLabel)
+        menuBarFormatRow.addSubview(menuBarFormatField)
+
+        let formatLabelWidthConstraint = menuBarFormatLabel.widthAnchor.constraint(equalToConstant: menuBarFormatLabelWidth)
+        menuBarFormatLabelWidthConstraint = formatLabelWidthConstraint
+
+        NSLayoutConstraint.activate([
+            menuBarDisplaySectionLabel.leadingAnchor.constraint(equalTo: menuBarDisplayContentView.leadingAnchor, constant: 22),
+            menuBarDisplaySectionLabel.topAnchor.constraint(equalTo: menuBarDisplayContentView.topAnchor, constant: 16),
+
+            menuBarFormatRow.leadingAnchor.constraint(equalTo: menuBarDisplayContentView.leadingAnchor, constant: 22),
+            menuBarFormatRow.trailingAnchor.constraint(equalTo: menuBarDisplayContentView.trailingAnchor, constant: -22),
+            menuBarFormatRow.topAnchor.constraint(equalTo: menuBarDisplaySectionLabel.bottomAnchor, constant: 12),
+            menuBarFormatRow.heightAnchor.constraint(equalToConstant: 38),
+
+            menuBarFormatLabel.leadingAnchor.constraint(equalTo: menuBarFormatRow.leadingAnchor, constant: 12),
+            menuBarFormatLabel.centerYAnchor.constraint(equalTo: menuBarFormatRow.centerYAnchor),
+            formatLabelWidthConstraint,
+
+            menuBarFormatField.leadingAnchor.constraint(equalTo: menuBarFormatLabel.trailingAnchor, constant: 10),
+            menuBarFormatField.trailingAnchor.constraint(equalTo: menuBarFormatRow.trailingAnchor, constant: -12),
+            menuBarFormatField.centerYAnchor.constraint(equalTo: menuBarFormatRow.centerYAnchor),
+            menuBarFormatField.heightAnchor.constraint(equalToConstant: 22)
+        ])
+    }
+
+    private var menuBarFormatLabelWidth: CGFloat {
+        AppLanguage.current == .korean ? 34 : 54
+    }
+
+    private func updateMenuBarFormatLabelWidth() {
+        menuBarFormatLabelWidthConstraint?.constant = menuBarFormatLabelWidth
+        menuBarDisplayContentView.layoutSubtreeIfNeeded()
+    }
+
+    private func refreshLaunchAtLoginState() {
+        launchAtLoginSwitch.state = isLaunchAtLoginSelected ? .on : .off
+    }
+
+    private func refreshUpdateCheckState() {
+        updateCheckSwitch.state = AppPreferences.isUpdateCheckAtLaunchEnabled ? .on : .off
+    }
+
+    private func reloadLanguagePopUpButton() {
+        let selectedLanguage = AppLanguage.current
+        languagePopUpButton.removeAllItems()
+
+        for language in AppLanguage.allCases {
+            languagePopUpButton.addItem(withTitle: language.displayName)
+            languagePopUpButton.lastItem?.representedObject = language.rawValue
+        }
+
+        if let selectedIndex = AppLanguage.allCases.firstIndex(of: selectedLanguage) {
+            languagePopUpButton.selectItem(at: selectedIndex)
+        }
+    }
+
+    @objc private func selectLanguage(_ sender: NSPopUpButton) {
+        guard let rawValue = sender.selectedItem?.representedObject as? String,
+              let language = AppLanguage(rawValue: rawValue)
+        else {
+            reloadLanguagePopUpButton()
+            return
+        }
+
+        AppLanguage.setCurrent(language)
+    }
+
+    private var isLaunchAtLoginSelected: Bool {
+        switch SMAppService.mainApp.status {
+        case .enabled:
+            return true
+        case .notRegistered, .notFound:
+            return false
+        case .requiresApproval:
+            return UserDefaults.standard.bool(forKey: FanCtlDefaults.launchAtLoginEnabledKey)
+        @unknown default:
+            return UserDefaults.standard.bool(forKey: FanCtlDefaults.launchAtLoginEnabledKey)
+        }
+    }
+
+    @objc private func toggleLaunchAtLogin(_ sender: NSSwitch) {
+        let shouldEnable = sender.state == .on
+        UserDefaults.standard.set(shouldEnable, forKey: FanCtlDefaults.launchAtLoginEnabledKey)
+
+        do {
+            if shouldEnable {
+                if SMAppService.mainApp.status != .enabled {
+                    try SMAppService.mainApp.register()
+                }
+            } else if SMAppService.mainApp.status != .notRegistered,
+                      SMAppService.mainApp.status != .notFound {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            NSLog("mFanCtl failed to update launch at login: \(error.localizedDescription)")
+            if shouldEnable {
+                UserDefaults.standard.set(false, forKey: FanCtlDefaults.launchAtLoginEnabledKey)
+                sender.state = .off
+            }
+        }
+    }
+
+    @objc private func toggleUpdateCheckAtLaunch(_ sender: NSSwitch) {
+        AppPreferences.setUpdateCheckAtLaunchEnabled(sender.state == .on)
+    }
+
+    private func refreshMenuBarFormat() {
+        guard menuBarFormatField.currentEditor() == nil else {
+            return
+        }
+        menuBarFormatField.stringValue = model.menuBarTitleFormat
+    }
+
+    @objc private func commitMenuBarFormatField(_ sender: NSTextField) {
+        model.updateMenuBarTitleFormat(sender.stringValue)
+        sender.stringValue = model.menuBarTitleFormat
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        guard let textField = obj.object as? NSTextField,
+              textField === menuBarFormatField
+        else {
+            return
+        }
+        model.updateMenuBarTitleFormat(textField.stringValue)
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard let textField = obj.object as? NSTextField,
+              textField === menuBarFormatField
+        else {
+            return
+        }
+        model.updateMenuBarTitleFormat(textField.stringValue)
+        textField.stringValue = model.menuBarTitleFormat
+    }
+
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [Self.generalToolbarIdentifier, Self.menuBarDisplayToolbarIdentifier]
+    }
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [Self.generalToolbarIdentifier, Self.menuBarDisplayToolbarIdentifier]
+    }
+
+    func toolbarSelectableItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [Self.generalToolbarIdentifier, Self.menuBarDisplayToolbarIdentifier]
+    }
+
+    func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        switch itemIdentifier {
+        case Self.generalToolbarIdentifier:
+            let item = makeToolbarItem(
+                identifier: itemIdentifier,
+                label: L10n.general,
+                symbolName: "gearshape",
+                action: #selector(selectGeneralToolbarItem(_:))
+            )
+            toolbar.selectedItemIdentifier = Self.generalToolbarIdentifier
+            return item
+        case Self.menuBarDisplayToolbarIdentifier:
+            return makeToolbarItem(
+                identifier: itemIdentifier,
+                label: L10n.menuBarDisplay,
+                symbolName: "menubar.rectangle",
+                action: #selector(selectMenuBarDisplayToolbarItem(_:))
+            )
+        default:
+            return nil
+        }
+    }
+
+    private func makeToolbarItem(
+        identifier: NSToolbarItem.Identifier,
+        label: String,
+        symbolName: String,
+        action: Selector
+    ) -> NSToolbarItem {
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.target = self
+        item.action = action
+        updateToolbarItem(item, label: label, symbolName: symbolName)
+        return item
+    }
+
+    private func refreshToolbarItems(_ toolbar: NSToolbar?) {
+        for item in toolbar?.items ?? [] {
+            switch item.itemIdentifier {
+            case Self.generalToolbarIdentifier:
+                updateToolbarItem(item, label: L10n.general, symbolName: "gearshape")
+            case Self.menuBarDisplayToolbarIdentifier:
+                updateToolbarItem(item, label: L10n.menuBarDisplay, symbolName: "menubar.rectangle")
+            default:
+                continue
+            }
+        }
+    }
+
+    private func updateToolbarItem(_ item: NSToolbarItem, label: String, symbolName: String) {
+        item.label = label
+        item.paletteLabel = label
+        item.toolTip = label
+        let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: label)
+            ?? NSImage(systemSymbolName: "textformat", accessibilityDescription: label)
+        if let image {
+            image.isTemplate = true
+            item.image = image
+        }
+    }
+
+    @objc private func selectGeneralToolbarItem(_ sender: NSToolbarItem) {
+        sender.toolbar?.selectedItemIdentifier = Self.generalToolbarIdentifier
+        if let didSelectGeneralTab {
+            didSelectGeneralTab()
+        } else {
+            showGeneralSettings()
+        }
+    }
+
+    @objc private func selectMenuBarDisplayToolbarItem(_ sender: NSToolbarItem) {
+        sender.toolbar?.selectedItemIdentifier = Self.menuBarDisplayToolbarIdentifier
+        if let didSelectMenuBarDisplayTab {
+            didSelectMenuBarDisplayTab()
+        } else {
+            showMenuBarDisplaySettings()
+        }
+    }
+
+    func showGeneralTab() {
+        showGeneralSettings()
+    }
+
+    func showMenuBarDisplayTab() {
+        showMenuBarDisplaySettings()
+    }
+
+    private func showGeneralSettings() {
+        selectedTab = .general
+        generalContentView.isHidden = false
+        menuBarDisplayContentView.isHidden = true
+        view.window?.title = currentTitle
+    }
+
+    private func showMenuBarDisplaySettings() {
+        selectedTab = .menuBarDisplay
+        generalContentView.isHidden = true
+        menuBarDisplayContentView.isHidden = false
+        view.window?.title = currentTitle
+    }
+}
+
+private final class SettingsRowView: NSView {
+    override var isOpaque: Bool {
+        false
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let radius: CGFloat = 14
+        let path = NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius)
+
+        cardBackgroundColor.setFill()
+        path.fill()
+    }
+
+    private var cardBackgroundColor: NSColor {
+        NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            return isDark
+                ? NSColor(calibratedWhite: 1.0, alpha: 0.055)
+                : NSColor(calibratedWhite: 0.0, alpha: 0.045)
+        }
+    }
+}
+
+private final class SettingsContentView: NSView {
+    override var isOpaque: Bool {
+        true
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.windowBackgroundColor.setFill()
+        dirtyRect.fill()
+    }
+}
+
+@MainActor
+final class FanCtlMenuBarModel: NSObject {
+    static let defaultMenuBarTitleFormat = "{RPM}rpm | {TEMP}℃"
+
+    var didChange: (@MainActor () -> Void)?
+    var didChangePresetList: (@MainActor () -> Void)?
+
+    private(set) var menuBarTitle = "--rpm | --℃" {
+        didSet { didChange?() }
+    }
+    private(set) var snapshot: SensorSnapshot? {
+        didSet { didChange?() }
+    }
+    private(set) var errorMessage: String? {
+        didSet { didChange?() }
+    }
+    private(set) var menuBarTitleFormat = FanCtlMenuBarModel.loadMenuBarTitleFormat()
+    private(set) var selectedPreset: FanPreset = .automatic {
+        didSet { didChange?() }
+    }
+    private var helperState: HelperState = .unknown {
+        didSet { didChange?() }
+    }
+    private(set) var userPresets: [UserFanPreset] = [] {
+        didSet {
+            saveUserPresets()
+            didChangePresetList?()
+            didChange?()
+        }
+    }
+
+    private let refreshInterval: TimeInterval = 2
+    private static let userPresetsKey = "userFanPresets"
+    private var reader: SensorReader?
+    private var timer: Timer?
+
+    var presetEntries: [FanPresetEntry] {
+        [
+            FanPresetEntry(
+                preset: .automatic,
+                name: L10n.automatic,
+                rpmText: L10n.automatic,
+                isEditable: false,
+                isDeletable: false
+            ),
+            FanPresetEntry(
+                preset: .maximum,
+                name: L10n.maximumSpeed,
+                rpmText: maximumPresetRPMText,
+                isEditable: false,
+                isDeletable: false
+            )
+        ] + userPresets.map {
+            FanPresetEntry(
+                preset: .custom($0.id),
+                name: $0.name,
+                rpmText: "\($0.rpm)",
+                isEditable: true,
+                isDeletable: true
+            )
+        }
+    }
+
+    var presetsDisabled: Bool {
+        helperState == .installing
+    }
+
+    var validUserRPMRange: ClosedRange<Int> {
+        guard let snapshot,
+              let maximum = average(snapshot.fans.compactMap(\.maximumRPM)),
+              maximum >= 1
+        else {
+            return 1...20000
+        }
+        return 1...max(1, Int(maximum.rounded()))
+    }
+
+    override init() {
+        super.init()
+        userPresets = Self.loadUserPresets()
+        do {
+            reader = try SensorReader(smc: SMCConnection())
+            refresh()
+            timer = Timer.scheduledTimer(
+                timeInterval: refreshInterval,
+                target: self,
+                selector: #selector(timerDidFire),
+                userInfo: nil,
+                repeats: true
+            )
+            RunLoop.main.add(timer!, forMode: .common)
+        } catch {
+            errorMessage = error.localizedDescription
+            menuBarTitle = "mFanCtl -"
+        }
+        refreshHelperState()
+    }
+
+    func refresh() {
+        guard let reader else {
+            errorMessage = L10n.smcConnectionFailed
+            menuBarTitle = "mFanCtl -"
+            return
+        }
+
+        let nextSnapshot = reader.snapshot()
+        snapshot = nextSnapshot
+        menuBarTitle = Self.title(for: nextSnapshot, format: menuBarTitleFormat)
+    }
+
+    func applyAutomaticPreset() {
+        applyPreset(.automatic)
+    }
+
+    func applyMaximumPreset() {
+        applyPreset(.maximum)
+    }
+
+    func applyUserPreset(id: UUID) {
+        applyPreset(.custom(id))
+    }
+
+    func applyPresetSelection(_ preset: FanPreset) {
+        applyPreset(preset)
+    }
+
+    @discardableResult
+    func addUserPreset() -> UUID {
+        addUserPreset(name: nextUserPresetName(), rpm: defaultUserPresetRPM())
+    }
+
+    @discardableResult
+    func addUserPreset(name: String, rpm: Int) -> UUID {
+        let id = UUID()
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let preset = UserFanPreset(
+            id: id,
+            name: trimmedName.isEmpty ? L10n.presetBaseName : trimmedName,
+            rpm: max(validUserRPMRange.lowerBound, min(validUserRPMRange.upperBound, rpm))
+        )
+        userPresets.append(preset)
+        return id
+    }
+
+    func deleteUserPreset(id: UUID) {
+        userPresets.removeAll { $0.id == id }
+        if selectedPreset == .custom(id) {
+            selectedPreset = .automatic
+        }
+    }
+
+    func updateUserPreset(id: UUID, name: String, rpm: Int) {
+        guard let index = userPresets.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        userPresets[index].name = trimmedName.isEmpty ? L10n.presetBaseName : trimmedName
+        userPresets[index].rpm = max(validUserRPMRange.lowerBound, min(validUserRPMRange.upperBound, rpm))
+    }
+
+    func updateMenuBarTitleFormat(_ format: String) {
+        let nextFormat = Self.normalizedMenuBarTitleFormat(format)
+        menuBarTitleFormat = nextFormat
+        UserDefaults.standard.set(nextFormat, forKey: FanCtlDefaults.menuBarTitleFormatKey)
+
+        if let snapshot {
+            menuBarTitle = Self.title(for: snapshot, format: nextFormat)
+        }
+    }
+
+    private static func title(for snapshot: SensorSnapshot, format: String) -> String {
+        let temperature = snapshot.gpuTemperature.map { "\(Int($0.averageCelsius.rounded()))" } ?? "--"
+        let fanSummary = fanSummary(snapshot.fans)
+        return formattedMenuBarTitle(rpm: fanSummary, temperature: temperature, format: format)
+    }
+
+    private static func formattedMenuBarTitle(rpm: String, temperature: String, format: String) -> String {
+        normalizedMenuBarTitleFormat(format)
+            .replacingOccurrences(of: "{RPM}", with: rpm)
+            .replacingOccurrences(of: "{TEMP}", with: temperature)
+    }
+
+    private static func loadMenuBarTitleFormat() -> String {
+        normalizedMenuBarTitleFormat(UserDefaults.standard.string(forKey: FanCtlDefaults.menuBarTitleFormatKey) ?? defaultMenuBarTitleFormat)
+    }
+
+    private static func normalizedMenuBarTitleFormat(_ format: String) -> String {
+        let singleLineFormat = format
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+        guard !singleLineFormat.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return defaultMenuBarTitleFormat
+        }
+        return singleLineFormat
+    }
+
+    private static func fanSummary(_ fans: [FanSnapshot]) -> String {
+        guard !fans.isEmpty else {
+            return "--"
+        }
+
+        let activeFans = fans.filter { $0.actualRPM > 1 }
+        guard !activeFans.isEmpty else {
+            return "0"
+        }
+
+        let average = activeFans.map(\.actualRPM).reduce(0, +) / Double(activeFans.count)
+        return "\(Int(average.rounded()))"
+    }
+
+    private func nextUserPresetName() -> String {
+        let existingNames = Set(presetEntries.map(\.name))
+        var index = userPresets.count + 1
+        while true {
+            let name = L10n.presetName(index: index)
+            if !existingNames.contains(name) {
+                return name
+            }
+            index += 1
+        }
+    }
+
+    private func defaultUserPresetRPM() -> Int {
+        guard let snapshot, !snapshot.fans.isEmpty else {
+            return 4000
+        }
+
+        let minimum = average(snapshot.fans.compactMap(\.minimumRPM)) ?? 2500
+        let maximum = average(snapshot.fans.compactMap(\.maximumRPM)) ?? 6500
+        return Int(((minimum + maximum) / 2).rounded())
+    }
+
+    var defaultNewUserPresetName: String {
+        nextUserPresetName()
+    }
+
+    var defaultNewUserPresetRPM: Int {
+        defaultUserPresetRPM()
+    }
+
+    private var maximumPresetRPMText: String {
+        guard let snapshot,
+              let maximum = average(snapshot.fans.compactMap(\.maximumRPM))
+        else {
+            return L10n.maximum
+        }
+        return "\(Int(maximum.rounded()))"
+    }
+
+    private func average(_ values: [Double]) -> Double? {
+        guard !values.isEmpty else {
+            return nil
+        }
+        return values.reduce(0, +) / Double(values.count)
+    }
+
+    private func saveUserPresets() {
+        guard let data = try? JSONEncoder().encode(userPresets) else {
+            return
+        }
+        UserDefaults.standard.set(data, forKey: Self.userPresetsKey)
+    }
+
+    private static func loadUserPresets() -> [UserFanPreset] {
+        guard let data = UserDefaults.standard.data(forKey: userPresetsKey),
+              let presets = try? JSONDecoder().decode([UserFanPreset].self, from: data)
+        else {
+            return []
+        }
+        return presets.map {
+            UserFanPreset(id: $0.id, name: $0.name, rpm: max(1, $0.rpm))
+        }
+    }
+
+    @objc private func timerDidFire() {
+        refresh()
+    }
+
+    private func applyPreset(_ preset: FanPreset) {
+        switch helperState {
+        case .unknown, .available:
+            applyPresetUsingHelper(preset)
+        case .unavailable:
+            promptToInstallHelper()
+        case .installing:
+            errorMessage = L10n.installingPermission
+        }
+    }
+
+    private func applyPresetUsingHelper(_ preset: FanPreset) {
+        errorMessage = nil
+
+        Task {
+            do {
+                try await sendHelperCommand(for: preset, waitForAvailability: true)
+                helperState = .available
+                selectedPreset = preset
+                refresh()
+            } catch FanCtlHelperClient.Error.unavailable {
+                helperState = .unavailable
+                promptToInstallHelper()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func sendHelperCommand(for preset: FanPreset, waitForAvailability: Bool = false) async throws {
+        let command = switch preset {
+        case .automatic:
+            "SET_AUTOMATIC"
+        case .maximum:
+            "SET_MAXIMUM"
+        case .custom(let id):
+            if let preset = userPresets.first(where: { $0.id == id }) {
+                "SET_RPM \(preset.rpm)"
+            } else {
+                throw FanCtlMenuError.missingPreset
+            }
+        }
+
+        _ = try await Task.detached {
+            if waitForAvailability {
+                try FanCtlHelperClient.waitUntilAvailable(timeout: 2.0)
+            }
+            _ = try FanCtlHelperClient.send(command)
+        }.value
+    }
+
+    private func promptToInstallHelper() {
+        if helperState == .installing {
+            errorMessage = L10n.installingPermission
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = L10n.fanPermissionRequired
+        alert.informativeText = L10n.fanPermissionMessage
+        let grantButton = alert.addButton(withTitle: L10n.grantPermission)
+        grantButton.keyEquivalent = "\r"
+        alert.addButton(withTitle: L10n.cancel)
+
+        guard runFrontmost(alert) == .alertFirstButtonReturn else {
+            errorMessage = L10n.fanPermissionRequired
+            return
+        }
+
+        installHelper()
+    }
+
+    private func installHelper() {
+        guard helperState != .installing else {
+            errorMessage = L10n.installingPermission
+            return
+        }
+
+        helperState = .installing
+        errorMessage = L10n.installingPermission
+
+        Task {
+            do {
+                try await Task.detached {
+                    try FanCtlHelperInstaller.install()
+                }.value
+                try await waitForHelperAvailability()
+                helperState = .available
+                errorMessage = nil
+            } catch InstallError.cancelled {
+                helperState = .unavailable
+                errorMessage = InstallError.cancelled.localizedDescription
+            } catch {
+                helperState = .unavailable
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func runFrontmost(_ alert: NSAlert) -> NSApplication.ModalResponse {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        alert.layout()
+        alert.window.level = .floating
+        alert.window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        centerWindowOnActiveScreen(alert.window)
+        alert.window.orderFrontRegardless()
+        return alert.runModal()
+    }
+
+    private func refreshHelperState() {
+        guard helperState == .unknown || helperState == .available || helperState == .unavailable else {
+            return
+        }
+
+        Task {
+            let isAvailable = await helperIsAvailable(timeout: 0.4)
+            guard helperState == .unknown || helperState == .available || helperState == .unavailable else {
+                return
+            }
+            helperState = isAvailable ? .available : .unavailable
+        }
+    }
+
+    private func helperIsAvailable(timeout: TimeInterval) async -> Bool {
+        do {
+            try await Task.detached {
+                try FanCtlHelperClient.waitUntilAvailable(timeout: timeout)
+            }.value
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func waitForHelperAvailability() async throws {
+        try await Task.detached {
+            try FanCtlHelperClient.waitUntilAvailable(timeout: 10.0)
+        }.value
+    }
+}
+
+struct UserFanPreset: Codable, Equatable {
+    let id: UUID
+    var name: String
+    var rpm: Int
+}
+
+struct FanPresetEntry: Equatable {
+    let preset: FanPreset
+    let name: String
+    let rpmText: String
+    let isEditable: Bool
+    let isDeletable: Bool
+
+    var menuIdentifier: String {
+        preset.menuIdentifier
+    }
+}
+
+enum FanPreset: Hashable {
+    case automatic
+    case maximum
+    case custom(UUID)
+
+    init?(menuIdentifier: String) {
+        switch menuIdentifier {
+        case "automatic":
+            self = .automatic
+        case "maximum":
+            self = .maximum
+        default:
+            guard menuIdentifier.hasPrefix("custom:") else {
+                return nil
+            }
+
+            let rawID = String(menuIdentifier.dropFirst("custom:".count))
+            guard let id = UUID(uuidString: rawID) else {
+                return nil
+            }
+            self = .custom(id)
+        }
+    }
+
+    var menuIdentifier: String {
+        switch self {
+        case .automatic:
+            "automatic"
+        case .maximum:
+            "maximum"
+        case .custom(let id):
+            "custom:\(id.uuidString)"
+        }
+    }
+}
+
+enum HelperState {
+    case unknown
+    case unavailable
+    case installing
+    case available
+}
+
+private enum FanCtlMenuError: LocalizedError {
+    case smcUnavailable
+    case noFans
+    case missingPreset
+
+    var errorDescription: String? {
+        switch self {
+        case .smcUnavailable:
+            L10n.smcConnectionFailed
+        case .noFans:
+            L10n.noFansFound
+        case .missingPreset:
+            L10n.missingPreset
+        }
+    }
+}
+
+private enum FanCtlHelperClient {
+    enum Error: LocalizedError {
+        case unavailable
+        case rejected(String)
+        case invalidResponse
+
+        var errorDescription: String? {
+            switch self {
+            case .unavailable:
+                L10n.helperUnavailable
+            case .rejected(let message):
+                message
+            case .invalidResponse:
+                L10n.invalidHelperResponse
+            }
+        }
+    }
+
+    private static let socketPath = "/var/run/io.github.jinnyday0719.mfanctl.helper.sock"
+
+    static func waitUntilAvailable(timeout: TimeInterval) throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        var lastError: Swift.Error = Error.unavailable
+
+        while Date() < deadline {
+            do {
+                _ = try send("PING")
+                return
+            } catch {
+                lastError = error
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+        }
+
+        throw lastError
+    }
+
+    static func send(_ command: String) throws -> String {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else {
+            throw Error.unavailable
+        }
+        defer { close(fd) }
+
+        var address = sockaddr_un()
+        address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+        address.sun_family = sa_family_t(AF_UNIX)
+
+        let pathBytes = Array(socketPath.utf8)
+        guard pathBytes.count < MemoryLayout.size(ofValue: address.sun_path) else {
+            throw Error.unavailable
+        }
+
+        withUnsafeMutablePointer(to: &address.sun_path) { pointer in
+            pointer.withMemoryRebound(to: CChar.self, capacity: pathBytes.count + 1) { buffer in
+                for (index, byte) in pathBytes.enumerated() {
+                    buffer[index] = CChar(bitPattern: byte)
+                }
+                buffer[pathBytes.count] = 0
+            }
+        }
+
+        let connectResult = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
+                Darwin.connect(fd, sockaddrPointer, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard connectResult == 0 else {
+            throw Error.unavailable
+        }
+
+        let request = Array((command + "\n").utf8)
+        try request.withUnsafeBytes { rawBuffer in
+            guard Darwin.write(fd, rawBuffer.baseAddress, rawBuffer.count) == rawBuffer.count else {
+                throw Error.unavailable
+            }
+        }
+
+        var buffer = [UInt8](repeating: 0, count: 1024)
+        let count = Darwin.read(fd, &buffer, buffer.count)
+        guard count > 0 else {
+            throw Error.invalidResponse
+        }
+
+        let response = String(decoding: buffer.prefix(Int(count)), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if response.hasPrefix("OK ") {
+            return String(response.dropFirst(3))
+        }
+        if response.hasPrefix("ERROR ") {
+            throw Error.rejected(String(response.dropFirst(6)))
+        }
+        throw Error.invalidResponse
+    }
+}
+
+private enum FanCtlHelperInstaller {
+    static func install() throws {
+        guard let resourcePath = Bundle.main.resourcePath else {
+            throw InstallError.missingInstaller
+        }
+
+        let installerPath = URL(fileURLWithPath: resourcePath)
+            .appendingPathComponent("install-helper.sh")
+            .path
+        guard FileManager.default.isExecutableFile(atPath: installerPath) else {
+            throw InstallError.missingInstaller
+        }
+
+        let command = "\(shellQuoted(installerPath)) \(shellQuoted(Bundle.main.bundlePath))"
+        let script = "do shell script \(appleScriptQuoted(command)) with administrator privileges"
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", script]
+
+        let errorPipe = Pipe()
+        process.standardError = errorPipe
+        try process.run()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            let data = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let message = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if message?.contains("-128") == true {
+                throw InstallError.cancelled
+            }
+            throw InstallError.failed(message?.isEmpty == false ? message! : "helper install failed")
+        }
+    }
+
+    private static func shellQuoted(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private static func appleScriptQuoted(_ value: String) -> String {
+        "\"" + value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"") + "\""
+    }
+}
+
+private enum InstallError: LocalizedError {
+    case cancelled
+    case missingInstaller
+    case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .cancelled:
+            L10n.permissionCancelled
+        case .missingInstaller:
+            L10n.missingInstaller
+        case .failed(let message):
+            message
+        }
+    }
+}

@@ -1,0 +1,17 @@
+.DS_Store
+.build/
+DerivedData/
+.swiftpm/
+*.xcuserdata/
+*.xcuserstate
+Resources/AppIcon.icns
+Resources/AppIcon.iconset/
+dist/
+*.dmg
+*.zip
+*.p12
+*.cer
+*.key
+*.mobileprovision
+.env
+.env.*
