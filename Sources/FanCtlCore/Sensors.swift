@@ -27,6 +27,8 @@ public struct SensorSnapshot: Sendable {
 }
 
 public final class SensorReader: Sendable {
+    private static let plausibleGPUTemperatureRange = 10.0..<130.0
+
     private let smc: SMCConnection
     private let hardware: HardwareProfile
 
@@ -51,8 +53,7 @@ public final class SensorReader: Sendable {
         let profile = sensorProfile(for: hardware)
         let readings = profile.gpuClusterKeys.compactMap { key -> TemperatureSensorReading? in
             guard let value = smc.numericValue(for: key),
-                  value > 0,
-                  value < 130 else {
+                  Self.plausibleGPUTemperatureRange.contains(value) else {
                 return nil
             }
             return TemperatureSensorReading(key: key, celsius: value)

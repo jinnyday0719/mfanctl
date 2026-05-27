@@ -2336,6 +2336,7 @@ final class FanCtlMenuBarModel: NSObject {
 
     private let refreshInterval: TimeInterval = 2
     private static let userPresetsKey = "userFanPresets"
+    private var lastValidGPUTemperature: Int?
     private var reader: SensorReader?
     private var timer: Timer?
 
@@ -2410,7 +2411,7 @@ final class FanCtlMenuBarModel: NSObject {
 
         let nextSnapshot = reader.snapshot()
         snapshot = nextSnapshot
-        menuBarTitle = Self.title(for: nextSnapshot, format: menuBarTitleFormat)
+        menuBarTitle = title(for: nextSnapshot, format: menuBarTitleFormat)
     }
 
     func applyAutomaticPreset() {
@@ -2470,14 +2471,25 @@ final class FanCtlMenuBarModel: NSObject {
         UserDefaults.standard.set(nextFormat, forKey: FanCtlDefaults.menuBarTitleFormatKey)
 
         if let snapshot {
-            menuBarTitle = Self.title(for: snapshot, format: nextFormat)
+            menuBarTitle = title(for: snapshot, format: nextFormat)
         }
     }
 
-    private static func title(for snapshot: SensorSnapshot, format: String) -> String {
-        let temperature = snapshot.gpuTemperature.map { "\(Int($0.averageCelsius.rounded()))" } ?? "--"
-        let fanSummary = fanSummary(snapshot.fans)
-        return formattedMenuBarTitle(rpm: fanSummary, temperature: temperature, format: format)
+    private func title(for snapshot: SensorSnapshot, format: String) -> String {
+        if let currentTemperature = Self.roundedGPUTemperature(snapshot.gpuTemperature) {
+            lastValidGPUTemperature = currentTemperature
+        }
+
+        let temperature = lastValidGPUTemperature.map(String.init) ?? "--"
+        let fanSummary = Self.fanSummary(snapshot.fans)
+        return Self.formattedMenuBarTitle(rpm: fanSummary, temperature: temperature, format: format)
+    }
+
+    private static func roundedGPUTemperature(_ gpuTemperature: GPUTemperatureSnapshot?) -> Int? {
+        guard let average = gpuTemperature?.averageCelsius, average.isFinite else {
+            return nil
+        }
+        return Int(average.rounded())
     }
 
     private static func formattedMenuBarTitle(rpm: String, temperature: String, format: String) -> String {
