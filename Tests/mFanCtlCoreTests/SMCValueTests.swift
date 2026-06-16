@@ -12,6 +12,18 @@ final class SMCValueTests: XCTestCase {
         XCTAssertEqual(value.numericValue, 42.5)
     }
 
+    func testFloatDecoding() {
+        let bitPattern = Float(42.5).bitPattern.littleEndian
+        let bytes = [
+            UInt8(bitPattern & 0xff),
+            UInt8((bitPattern >> 8) & 0xff),
+            UInt8((bitPattern >> 16) & 0xff),
+            UInt8((bitPattern >> 24) & 0xff)
+        ]
+        let value = SMCValue(key: "Tg00", dataType: "flt ", dataSize: 4, bytes: bytes)
+        XCTAssertEqual(value.numericValue ?? 0, 42.5, accuracy: 0.001)
+    }
+
     func testGPUKeysForM4Pro() {
         XCTAssertEqual(
             gpuClusterTemperatureKeys(modelIdentifier: "Mac16,8", family: .m4ProOrMax),

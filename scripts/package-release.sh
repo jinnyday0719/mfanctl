@@ -4,9 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="mFanCtl"
 BUNDLE_ID="io.github.jinnyday0719.mfanctl"
-HELPER_ID="io.github.jinnyday0719.mfanctl.helper"
+HELPER_ID="io.github.jinnyday0719.mfanctl.FanControlHelper"
 APP="$ROOT/.build/$APP_NAME.app"
-HELPER="$APP/Contents/Library/PrivilegedHelperTools/$HELPER_ID"
+HELPER="$APP/Contents/Library/LaunchServices/mFanCtlFanHelper"
 DIST="$ROOT/dist"
 DMG_ROOT="$DIST/dmg-root"
 
@@ -93,7 +93,7 @@ EOF
 fi
 
 cd "$ROOT"
-APP_VERSION="$APP_VERSION" BUILD_NUMBER="$BUILD_NUMBER" "$ROOT/scripts/package-menubar-app.sh" >/dev/null
+APP_VERSION="$APP_VERSION" BUILD_NUMBER="$BUILD_NUMBER" BUILD_CONFIGURATION=release "$ROOT/scripts/package-menubar-app.sh" >/dev/null
 
 codesign --force --timestamp --options runtime \
     --sign "$IDENTITY" \

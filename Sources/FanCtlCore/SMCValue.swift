@@ -58,9 +58,11 @@ public struct SMCValue: Sendable {
             return fixedPoint(divisor: 1)
         case "flt ":
             guard bytes.count >= 4 else { return nil }
-            let value = bytes.prefix(4).withUnsafeBytes { rawBuffer in
-                rawBuffer.load(as: Float.self)
-            }
+            let bitPattern = UInt32(bytes[0])
+                | UInt32(bytes[1]) << 8
+                | UInt32(bytes[2]) << 16
+                | UInt32(bytes[3]) << 24
+            let value = Float(bitPattern: bitPattern)
             guard value.isFinite else { return nil }
             return Double(value)
         case "fpe2":

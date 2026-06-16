@@ -1,5 +1,5 @@
 import AppKit
-import Darwin
+import Dispatch
 import FanCtlCore
 import QuartzCore
 import ServiceManagement
@@ -59,17 +59,18 @@ private enum AppLanguage: String, CaseIterable {
     }
 }
 
-private enum L10n {
+enum L10n {
     private static func text(_ korean: String, _ english: String) -> String {
         AppLanguage.current == .korean ? korean : english
     }
 
-    static var quitApp: String { text("mFanCtl 종료", "Quit mFanCtl") }
+    static var quitApp: String { text("종료", "Quit") }
     static var windowMenu: String { text("윈도우", "Window") }
     static var closeWindow: String { text("닫기", "Close") }
     static var launchAtLoginPromptTitle: String { text("로그인 시 열기", "Open at Login") }
     static var launchAtLoginPromptMessage: String { text("mFanCtl을 로그인할 때 자동으로 열 수 있습니다.", "mFanCtl can open automatically when you log in.") }
     static var allow: String { text("허용", "Allow") }
+    static var openSystemSettings: String { text("설정 열기", "Open Settings") }
     static var later: String { text("나중에", "Later") }
     static var fanPresetsHeader: String { text("팬 사전 설정:", "Fan Presets:") }
     static var createPreset: String { text("사전 설정 만들기", "Create Preset") }
@@ -99,17 +100,20 @@ private enum L10n {
     static var maximumSpeed: String { text("최고 속도", "Maximum Speed") }
     static var presetBaseName: String { text("사전 설정", "Preset") }
     static var maximum: String { text("최대", "Max") }
-    static var installingPermission: String { text("권한 설정 중...", "Setting up permission...") }
-    static var fanPermissionRequired: String { text("팬 제어 권한 필요", "Fan Control Permission Required") }
-    static var fanPermissionMessage: String { text("팬 속도를 변경하려면 관리자 권한이 필요합니다.", "Administrator permission is required to change fan speed.") }
-    static var grantPermission: String { text("권한 설정", "Set Up Permission") }
+    static var installingPermission: String { text("팬 제어 준비 중...", "Preparing fan control...") }
     static var smcConnectionFailed: String { text("SMC 연결에 실패했습니다.", "SMC connection failed.") }
     static var noFansFound: String { text("팬을 찾을 수 없습니다.", "No fans found.") }
     static var missingPreset: String { text("사전 설정을 찾을 수 없습니다.", "Preset not found.") }
     static var helperUnavailable: String { text("팬 제어 helper가 설치되어 있지 않습니다.", "Fan control helper is not installed.") }
     static var invalidHelperResponse: String { text("helper 응답이 올바르지 않습니다.", "Invalid helper response.") }
-    static var permissionCancelled: String { text("권한 설정이 취소되었습니다.", "Permission setup was cancelled.") }
-    static var missingInstaller: String { text("helper 설치 파일이 앱 번들에 없습니다.", "Helper installer is missing from the app bundle.") }
+    static var helperApprovalPromptTitle: String { text("백그라운드 앱 허용", "Allow Background App") }
+    static var helperApprovalPromptMessage: String {
+        text(
+            "팬 제어를 사용하려면 시스템 설정에서 mFanCtl을 백그라운드 앱으로 허용해야 합니다.",
+            "To control fans, allow mFanCtl as a background app in System Settings."
+        )
+    }
+    static var helperRequiresApproval: String { text("백그라운드 앱에서 mFanCtl을 허용해주세요.", "Allow mFanCtl in Background Apps.") }
     static var updateAvailableTitle: String { text("새 버전이 있습니다", "Update Available") }
     static var noUpdatesTitle: String { text("최신 버전입니다", "You're Up to Date") }
     static var updateCheckFailedTitle: String { text("업데이트 확인 실패", "Update Check Failed") }
@@ -282,6 +286,7 @@ final class FanCtlAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, 
     private var errorItem: NSMenuItem?
     private var settingsWindowController: FanCtlSettingsWindowController?
     private var createPresetWindowController: FanCtlCreatePresetWindowController?
+    private var isShowingFanHelperApprovalPrompt = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMainMenu()
@@ -305,6 +310,10 @@ final class FanCtlAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, 
             self?.buildMenu()
             self?.refreshMenu()
         }
+        model.didRequireHelperApproval = { [weak self] in
+            self?.promptForFanHelperApprovalIfNeeded()
+        }
+        model.prepareHelper()
         refreshMenu()
         DispatchQueue.main.async { [weak self] in
             guard let self else {
@@ -334,8 +343,21 @@ final class FanCtlAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, 
         let appMenu = NSMenu(title: "mFanCtl")
         appMenuItem.submenu = appMenu
 
-        let quitItem = NSMenuItem(title: L10n.quitApp, action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        quitItem.target = NSApplication.shared
+        let settingsItem = makePlainShortcutItem(
+            title: L10n.settings,
+            action: #selector(openSettings),
+            keyEquivalent: ",",
+            target: self
+        )
+        appMenu.addItem(settingsItem)
+        appMenu.addItem(.separator())
+
+        let quitItem = makePlainShortcutItem(
+            title: L10n.quitApp,
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q",
+            target: NSApplication.shared
+        )
         appMenu.addItem(quitItem)
 
         let windowMenuItem = NSMenuItem()
@@ -373,6 +395,27 @@ final class FanCtlAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, 
             disableLaunchAtLogin()
             UserDefaults.standard.set(false, forKey: FanCtlDefaults.launchAtLoginEnabledKey)
         }
+    }
+
+    private func promptForFanHelperApprovalIfNeeded() {
+        guard !isShowingFanHelperApprovalPrompt else {
+            return
+        }
+
+        isShowingFanHelperApprovalPrompt = true
+
+        let alert = NSAlert()
+        alert.messageText = L10n.helperApprovalPromptTitle
+        alert.informativeText = L10n.helperApprovalPromptMessage
+        let openButton = alert.addButton(withTitle: L10n.openSystemSettings)
+        openButton.keyEquivalent = "\r"
+        alert.addButton(withTitle: L10n.later)
+
+        if runFrontmost(alert) == .alertFirstButtonReturn {
+            SMAppService.openSystemSettingsLoginItems()
+        }
+
+        isShowingFanHelperApprovalPrompt = false
     }
 
     private func enableLaunchAtLogin() -> Bool {
@@ -445,8 +488,12 @@ final class FanCtlAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, 
 
         menu.addItem(.separator())
 
-        let settingsItem = NSMenuItem(title: L10n.settings, action: #selector(openSettings), keyEquivalent: "")
-        settingsItem.target = self
+        let settingsItem = makePlainShortcutItem(
+            title: L10n.settings,
+            action: #selector(openSettings),
+            keyEquivalent: ",",
+            target: self
+        )
         menu.addItem(settingsItem)
 
         menu.addItem(.separator())
@@ -465,9 +512,30 @@ final class FanCtlAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, 
 
         menu.addItem(.separator())
 
-        let quitItem = NSMenuItem(title: L10n.quitApp, action: #selector(quit), keyEquivalent: "")
-        quitItem.target = self
+        let quitItem = makePlainShortcutItem(
+            title: L10n.quitApp,
+            action: #selector(quit),
+            keyEquivalent: "q",
+            target: self
+        )
         menu.addItem(quitItem)
+    }
+
+    private func makePlainShortcutItem(
+        title: String,
+        action: Selector,
+        keyEquivalent: String,
+        target: AnyObject
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: keyEquivalent)
+        item.target = target
+        item.keyEquivalentModifierMask = [.command]
+        item.image = nil
+        item.onStateImage = nil
+        item.offStateImage = nil
+        item.mixedStateImage = nil
+        item.indentationLevel = 0
+        return item
     }
 
     @objc private func languageDidChange(_ notification: Notification) {
@@ -529,6 +597,12 @@ final class FanCtlAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, 
         else {
             return
         }
+
+        if model.requiresHelperApproval {
+            SMAppService.openSystemSettingsLoginItems()
+            return
+        }
+
         model.applyPresetSelection(preset)
     }
 
@@ -2309,6 +2383,7 @@ final class FanCtlMenuBarModel: NSObject {
 
     var didChange: (@MainActor () -> Void)?
     var didChangePresetList: (@MainActor () -> Void)?
+    var didRequireHelperApproval: (@MainActor () -> Void)?
 
     private(set) var menuBarTitle = "--rpm | --℃" {
         didSet { didChange?() }
@@ -2326,6 +2401,9 @@ final class FanCtlMenuBarModel: NSObject {
     private var helperState: HelperState = .unknown {
         didSet { didChange?() }
     }
+    private(set) var requiresHelperApproval = false {
+        didSet { didChange?() }
+    }
     private(set) var userPresets: [UserFanPreset] = [] {
         didSet {
             saveUserPresets()
@@ -2335,8 +2413,10 @@ final class FanCtlMenuBarModel: NSObject {
     }
 
     private let refreshInterval: TimeInterval = 2
+    private static let maximumStaleTemperatureAge: TimeInterval = 30
     private static let userPresetsKey = "userFanPresets"
     private var lastValidGPUTemperature: Int?
+    private var lastValidGPUTemperatureDate: Date?
     private var reader: SensorReader?
     private var timer: Timer?
 
@@ -2402,6 +2482,10 @@ final class FanCtlMenuBarModel: NSObject {
         refreshHelperState()
     }
 
+    func prepareHelper() {
+        prepareHelperSilently()
+    }
+
     func refresh() {
         guard let reader else {
             errorMessage = L10n.smcConnectionFailed
@@ -2412,18 +2496,6 @@ final class FanCtlMenuBarModel: NSObject {
         let nextSnapshot = reader.snapshot()
         snapshot = nextSnapshot
         menuBarTitle = title(for: nextSnapshot, format: menuBarTitleFormat)
-    }
-
-    func applyAutomaticPreset() {
-        applyPreset(.automatic)
-    }
-
-    func applyMaximumPreset() {
-        applyPreset(.maximum)
-    }
-
-    func applyUserPreset(id: UUID) {
-        applyPreset(.custom(id))
     }
 
     func applyPresetSelection(_ preset: FanPreset) {
@@ -2478,11 +2550,24 @@ final class FanCtlMenuBarModel: NSObject {
     private func title(for snapshot: SensorSnapshot, format: String) -> String {
         if let currentTemperature = Self.roundedGPUTemperature(snapshot.gpuTemperature) {
             lastValidGPUTemperature = currentTemperature
+            lastValidGPUTemperatureDate = Date()
         }
 
-        let temperature = lastValidGPUTemperature.map(String.init) ?? "--"
+        let temperature = recentGPUTemperatureText()
         let fanSummary = Self.fanSummary(snapshot.fans)
         return Self.formattedMenuBarTitle(rpm: fanSummary, temperature: temperature, format: format)
+    }
+
+    private func recentGPUTemperatureText(now: Date = Date()) -> String {
+        guard let temperature = lastValidGPUTemperature,
+              let date = lastValidGPUTemperatureDate,
+              now.timeIntervalSince(date) <= Self.maximumStaleTemperatureAge
+        else {
+            lastValidGPUTemperature = nil
+            lastValidGPUTemperatureDate = nil
+            return "--"
+        }
+        return "\(temperature)"
     }
 
     private static func roundedGPUTemperature(_ gpuTemperature: GPUTemperatureSnapshot?) -> Int? {
@@ -2592,6 +2677,7 @@ final class FanCtlMenuBarModel: NSObject {
 
     @objc private func timerDidFire() {
         refresh()
+        refreshHelperState()
     }
 
     private func applyPreset(_ preset: FanPreset) {
@@ -2599,7 +2685,7 @@ final class FanCtlMenuBarModel: NSObject {
         case .unknown, .available:
             applyPresetUsingHelper(preset)
         case .unavailable:
-            promptToInstallHelper()
+            installHelper(thenApply: preset)
         case .installing:
             errorMessage = L10n.installingPermission
         }
@@ -2607,16 +2693,18 @@ final class FanCtlMenuBarModel: NSObject {
 
     private func applyPresetUsingHelper(_ preset: FanPreset) {
         errorMessage = nil
+        requiresHelperApproval = false
 
         Task {
             do {
                 try await sendHelperCommand(for: preset, waitForAvailability: true)
                 helperState = .available
+                requiresHelperApproval = false
                 selectedPreset = preset
                 refresh()
             } catch FanCtlHelperClient.Error.unavailable {
                 helperState = .unavailable
-                promptToInstallHelper()
+                installHelper(thenApply: preset)
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -2637,42 +2725,20 @@ final class FanCtlMenuBarModel: NSObject {
             }
         }
 
-        _ = try await Task.detached {
-            if waitForAvailability {
-                try FanCtlHelperClient.waitUntilAvailable(timeout: 2.0)
-            }
-            _ = try FanCtlHelperClient.send(command)
-        }.value
+        if waitForAvailability {
+            try await FanCtlHelperClient.waitUntilAvailable(timeout: 2.0)
+        }
+        _ = try await FanCtlHelperClient.send(command)
     }
 
-    private func promptToInstallHelper() {
-        if helperState == .installing {
-            errorMessage = L10n.installingPermission
-            return
-        }
-
-        let alert = NSAlert()
-        alert.messageText = L10n.fanPermissionRequired
-        alert.informativeText = L10n.fanPermissionMessage
-        let grantButton = alert.addButton(withTitle: L10n.grantPermission)
-        grantButton.keyEquivalent = "\r"
-        alert.addButton(withTitle: L10n.cancel)
-
-        guard runFrontmost(alert) == .alertFirstButtonReturn else {
-            errorMessage = L10n.fanPermissionRequired
-            return
-        }
-
-        installHelper()
-    }
-
-    private func installHelper() {
+    private func installHelper(thenApply preset: FanPreset? = nil) {
         guard helperState != .installing else {
             errorMessage = L10n.installingPermission
             return
         }
 
         helperState = .installing
+        requiresHelperApproval = false
         errorMessage = L10n.installingPermission
 
         Task {
@@ -2682,25 +2748,59 @@ final class FanCtlMenuBarModel: NSObject {
                 }.value
                 try await waitForHelperAvailability()
                 helperState = .available
+                requiresHelperApproval = false
                 errorMessage = nil
-            } catch InstallError.cancelled {
+                if let preset {
+                    try await sendHelperCommand(for: preset, waitForAvailability: false)
+                    selectedPreset = preset
+                    refresh()
+                }
+            } catch InstallError.requiresApproval {
                 helperState = .unavailable
-                errorMessage = InstallError.cancelled.localizedDescription
+                requiresHelperApproval = true
+                errorMessage = InstallError.requiresApproval.localizedDescription
+                NSLog("mFanCtl fan helper requires approval")
+                SMAppService.openSystemSettingsLoginItems()
             } catch {
                 helperState = .unavailable
+                requiresHelperApproval = false
                 errorMessage = error.localizedDescription
+                NSLog("mFanCtl failed to prepare fan helper: \(error.localizedDescription)")
             }
         }
     }
 
-    private func runFrontmost(_ alert: NSAlert) -> NSApplication.ModalResponse {
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        alert.layout()
-        alert.window.level = .floating
-        alert.window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        centerWindowOnActiveScreen(alert.window)
-        alert.window.orderFrontRegardless()
-        return alert.runModal()
+    private func prepareHelperSilently() {
+        Task {
+            do {
+                try await Task.detached {
+                    try FanCtlHelperInstaller.install()
+                }.value
+                try await waitForHelperAvailability(timeout: 2.0)
+                guard helperState != .installing else {
+                    return
+                }
+                helperState = .available
+                requiresHelperApproval = false
+                errorMessage = nil
+            } catch InstallError.requiresApproval {
+                guard helperState == .unknown || helperState == .unavailable else {
+                    return
+                }
+                helperState = .unavailable
+                requiresHelperApproval = true
+                errorMessage = InstallError.requiresApproval.localizedDescription
+                didRequireHelperApproval?()
+                NSLog("mFanCtl fan helper requires approval")
+            } catch {
+                guard helperState == .unknown || helperState == .unavailable else {
+                    return
+                }
+                helperState = .unavailable
+                requiresHelperApproval = false
+                NSLog("mFanCtl silent fan helper preparation failed: \(error.localizedDescription)")
+            }
+        }
     }
 
     private func refreshHelperState() {
@@ -2714,24 +2814,24 @@ final class FanCtlMenuBarModel: NSObject {
                 return
             }
             helperState = isAvailable ? .available : .unavailable
+            if isAvailable {
+                requiresHelperApproval = false
+                errorMessage = nil
+            }
         }
     }
 
     private func helperIsAvailable(timeout: TimeInterval) async -> Bool {
         do {
-            try await Task.detached {
-                try FanCtlHelperClient.waitUntilAvailable(timeout: timeout)
-            }.value
+            try await FanCtlHelperClient.waitUntilAvailable(timeout: timeout)
             return true
         } catch {
             return false
         }
     }
 
-    private func waitForHelperAvailability() async throws {
-        try await Task.detached {
-            try FanCtlHelperClient.waitUntilAvailable(timeout: 10.0)
-        }.value
+    private func waitForHelperAvailability(timeout: TimeInterval = 10.0) async throws {
+        try await FanCtlHelperClient.waitUntilAvailable(timeout: timeout)
     }
 }
 
@@ -2809,165 +2909,6 @@ private enum FanCtlMenuError: LocalizedError {
             L10n.noFansFound
         case .missingPreset:
             L10n.missingPreset
-        }
-    }
-}
-
-private enum FanCtlHelperClient {
-    enum Error: LocalizedError {
-        case unavailable
-        case rejected(String)
-        case invalidResponse
-
-        var errorDescription: String? {
-            switch self {
-            case .unavailable:
-                L10n.helperUnavailable
-            case .rejected(let message):
-                message
-            case .invalidResponse:
-                L10n.invalidHelperResponse
-            }
-        }
-    }
-
-    private static let socketPath = "/var/run/io.github.jinnyday0719.mfanctl.helper.sock"
-
-    static func waitUntilAvailable(timeout: TimeInterval) throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        var lastError: Swift.Error = Error.unavailable
-
-        while Date() < deadline {
-            do {
-                _ = try send("PING")
-                return
-            } catch {
-                lastError = error
-                Thread.sleep(forTimeInterval: 0.1)
-            }
-        }
-
-        throw lastError
-    }
-
-    static func send(_ command: String) throws -> String {
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else {
-            throw Error.unavailable
-        }
-        defer { close(fd) }
-
-        var address = sockaddr_un()
-        address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
-        address.sun_family = sa_family_t(AF_UNIX)
-
-        let pathBytes = Array(socketPath.utf8)
-        guard pathBytes.count < MemoryLayout.size(ofValue: address.sun_path) else {
-            throw Error.unavailable
-        }
-
-        withUnsafeMutablePointer(to: &address.sun_path) { pointer in
-            pointer.withMemoryRebound(to: CChar.self, capacity: pathBytes.count + 1) { buffer in
-                for (index, byte) in pathBytes.enumerated() {
-                    buffer[index] = CChar(bitPattern: byte)
-                }
-                buffer[pathBytes.count] = 0
-            }
-        }
-
-        let connectResult = withUnsafePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
-                Darwin.connect(fd, sockaddrPointer, socklen_t(MemoryLayout<sockaddr_un>.size))
-            }
-        }
-        guard connectResult == 0 else {
-            throw Error.unavailable
-        }
-
-        let request = Array((command + "\n").utf8)
-        try request.withUnsafeBytes { rawBuffer in
-            guard Darwin.write(fd, rawBuffer.baseAddress, rawBuffer.count) == rawBuffer.count else {
-                throw Error.unavailable
-            }
-        }
-
-        var buffer = [UInt8](repeating: 0, count: 1024)
-        let count = Darwin.read(fd, &buffer, buffer.count)
-        guard count > 0 else {
-            throw Error.invalidResponse
-        }
-
-        let response = String(decoding: buffer.prefix(Int(count)), as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if response.hasPrefix("OK ") {
-            return String(response.dropFirst(3))
-        }
-        if response.hasPrefix("ERROR ") {
-            throw Error.rejected(String(response.dropFirst(6)))
-        }
-        throw Error.invalidResponse
-    }
-}
-
-private enum FanCtlHelperInstaller {
-    static func install() throws {
-        guard let resourcePath = Bundle.main.resourcePath else {
-            throw InstallError.missingInstaller
-        }
-
-        let installerPath = URL(fileURLWithPath: resourcePath)
-            .appendingPathComponent("install-helper.sh")
-            .path
-        guard FileManager.default.isExecutableFile(atPath: installerPath) else {
-            throw InstallError.missingInstaller
-        }
-
-        let command = "\(shellQuoted(installerPath)) \(shellQuoted(Bundle.main.bundlePath))"
-        let script = "do shell script \(appleScriptQuoted(command)) with administrator privileges"
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", script]
-
-        let errorPipe = Pipe()
-        process.standardError = errorPipe
-        try process.run()
-        process.waitUntilExit()
-
-        guard process.terminationStatus == 0 else {
-            let data = errorPipe.fileHandleForReading.readDataToEndOfFile()
-            let message = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if message?.contains("-128") == true {
-                throw InstallError.cancelled
-            }
-            throw InstallError.failed(message?.isEmpty == false ? message! : "helper install failed")
-        }
-    }
-
-    private static func shellQuoted(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
-    private static func appleScriptQuoted(_ value: String) -> String {
-        "\"" + value
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"") + "\""
-    }
-}
-
-private enum InstallError: LocalizedError {
-    case cancelled
-    case missingInstaller
-    case failed(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .cancelled:
-            L10n.permissionCancelled
-        case .missingInstaller:
-            L10n.missingInstaller
-        case .failed(let message):
-            message
         }
     }
 }

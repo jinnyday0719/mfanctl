@@ -10,7 +10,7 @@ temperature.
 
 - Apple Silicon Mac with built-in fans
 - macOS 14 or later
-- Administrator permission is required to install the helper tool
+- macOS approval is required to enable the fan control helper
 
 Fanless models such as MacBook Air cannot use fan control. Intel Macs are not
 supported.
@@ -29,8 +29,7 @@ supported.
 Download the latest DMG from the Releases page, open it, and drag `mFanCtl.app`
 to Applications.
 
-On first fan-control use, macOS will ask for administrator permission to install
-the helper tool.
+When fan control is enabled, macOS may ask you to allow the fan control helper.
 
 ## Notes
 

@@ -9,7 +9,6 @@ let package = Package(
     ],
     products: [
         .library(name: "FanCtlCore", targets: ["FanCtlCore"]),
-        .executable(name: "mfanctl-probe", targets: ["FanCtlProbe"]),
         .executable(name: "mfanctl-menubar", targets: ["FanCtlMenuBar"]),
         .executable(name: "mfanctl-helper", targets: ["FanCtlHelper"])
     ],
@@ -20,13 +19,12 @@ let package = Package(
                 .linkedFramework("IOKit")
             ]
         ),
-        .executableTarget(
-            name: "FanCtlProbe",
-            dependencies: ["FanCtlCore"]
+        .target(
+            name: "FanCtlHelperXPC"
         ),
         .executableTarget(
             name: "FanCtlMenuBar",
-            dependencies: ["FanCtlCore"],
+            dependencies: ["FanCtlCore", "FanCtlHelperXPC"],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("ServiceManagement")
@@ -34,7 +32,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "FanCtlHelper",
-            dependencies: ["FanCtlCore"]
+            dependencies: ["FanCtlCore", "FanCtlHelperXPC"],
+            linkerSettings: [
+                .linkedFramework("Security")
+            ]
         ),
         .testTarget(
             name: "mFanCtlCoreTests",
